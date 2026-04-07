@@ -3,7 +3,10 @@ import time
 import logging
 import requests
 from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware
+try:
+    from web3.middleware import ExtraDataToPOAMiddleware
+except ImportError:
+    from web3.middleware import geth_poa_middleware as ExtraDataToPOAMiddleware
 
 # ── CINEMATIC LOGGER ──────────────────────────────────────────────────────────
 class CinematicFormatter(logging.Formatter):
