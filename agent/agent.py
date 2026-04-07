@@ -119,7 +119,7 @@ def _sign_tx(fn, nonce, gas=300_000):
         "chainId":  w3.eth.chain_id,
     })
     signed = w3.eth.account.sign_transaction(raw_tx, PRIVATE_KEY)
-   return signed.rawTransaction.hex()
+    return signed.rawTransaction.hex()
 
 
 def build_ghost_routes():
