@@ -29,7 +29,7 @@ HEADERS = {
 
 # ── RESEND CONFIG ─────────────────────────────────────────────────────────────
 RESEND_API_KEY    = "re_7Cdgna3H_DGZovtkR679kf4iSeL93Do5q"
-RESEND_FROM_EMAIL = "alerts@vantaguard.xyz"
+RESEND_FROM_EMAIL = "onboarding@resend.dev"
 RESEND_API_URL    = "https://api.resend.com/emails"
 
 # ── ETHERLINK CONFIG ──────────────────────────────────────────────────────────
