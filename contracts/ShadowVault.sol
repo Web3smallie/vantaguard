@@ -204,7 +204,7 @@ contract UserVault {
     }
 
     modifier notInBunker() {
-        require(!bunkerMode, "Vault in bunker mode — no external calls");
+        require(!bunkerMode, "Vault in bunker mode - no external calls");
         _;
     }
 

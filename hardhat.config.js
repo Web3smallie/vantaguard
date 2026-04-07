@@ -1,4 +1,5 @@
 require("@nomicfoundation/hardhat-toolbox");
+require("dotenv").config();
 
 module.exports = {
   solidity: {
@@ -12,9 +13,9 @@ module.exports = {
     },
   },
   networks: {
-    etherlink_shadownet: {
+    etherlink: {
       url: "https://node.shadownet.etherlink.com",
-      accounts: ["161a61dcf4480b5663d66f08144542f9f84359df3cb589d97bd5b79ac1f498e7"],
+      accounts: [process.env.PRIVATE_KEY],
     },
   },
 };
