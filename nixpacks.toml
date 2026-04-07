@@ -5,4 +5,4 @@ nixPkgs = ["python311", "python311Packages.pip"]
 cmds = ["pip3 install -r agent/requirements.txt --break-system-packages"]
 
 [start]
-cmd = "python3 agent/agent.py"
+cmd = "python3 /app/agent/agent.py"
