@@ -110,10 +110,7 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
 
       // Sweep
       const sweepAngle = Math.PI / 3;
-      const grad = ctx.createConicalGradient
-        ? null
-        : null;
-
+      
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(cx, cy);
