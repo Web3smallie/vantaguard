@@ -1,5 +1,6 @@
 export const FACTORY_ADDRESS = "0xaCBF04d0E3D956BC5733C2843C89879dd454b81d";
 export const AGENT_WALLET = "0x46408C26e2df32FB047D7E79020383969c196396";
+export const POSITION_MANAGER_ADDRESS = "0x743E03cceB4af2efA3CC76838f6E8B50B63F184c";
 
 export const FACTORY_ABI = [
   {
@@ -30,22 +31,14 @@ export const VAULT_ABI = [
     type: "function",
   },
   {
-    inputs: [
-      { internalType: "address", name: "_newAgent", type: "address" },
-    ],
+    inputs: [{ internalType: "address", name: "_newAgent", type: "address" }],
     name: "setAgent",
     outputs: [],
     stateMutability: "nonpayable",
     type: "function",
   },
   {
-    inputs: [
-      {
-        internalType: "uint8",
-        name: "_preference",
-        type: "uint8",
-      },
-    ],
+    inputs: [{ internalType: "uint8", name: "_preference", type: "uint8" }],
     name: "setRecoveryPreference",
     outputs: [],
     stateMutability: "nonpayable",
@@ -72,6 +65,14 @@ export const VAULT_ABI = [
     stateMutability: "view",
     type: "function",
   },
+] as const;
+
+export const POSITION_MANAGER_ABI = [
+  "function balanceOf(address owner) view returns (uint256)",
+  "function tokenOfOwnerByIndex(address owner, uint256 index) view returns (uint256)",
+  "function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)",
+  "function approve(address to, uint256 tokenId)",
+  "function safeTransferFrom(address from, address to, uint256 tokenId)",
 ] as const;
 
 export const ETHERLINK = {

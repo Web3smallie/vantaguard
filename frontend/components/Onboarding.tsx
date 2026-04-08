@@ -1,124 +1,268 @@
 "use client";
-import { useState } from "react";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { FACTORY_ADDRESS, FACTORY_ABI, AGENT_WALLET } from "@/lib/contracts";
+import { useState, useEffect } from "react";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract } from "wagmi";
+import { createPublicClient, http } from "viem";
+import { FACTORY_ADDRESS, FACTORY_ABI, AGENT_WALLET, VAULT_ABI, POSITION_MANAGER_ADDRESS, POSITION_MANAGER_ABI } from "@/lib/contracts";
 
-type Step = {
-  num: string;
-  name: string;
-  status: "pending" | "ready" | "done";
+type Position = {
+  tokenId: bigint;
+  token0: string;
+  token1: string;
+  liquidity: bigint;
 };
 
 export function Onboarding({ strategy }: { strategy: number }) {
   const { address } = useAccount();
-  const [steps, setSteps] = useState<Step[]>([
-    { num: "01", name: "Connect Wallet", status: "ready" },
-    { num: "02", name: "Create Vault", status: "pending" },
-    { num: "03", name: "Set Strategy", status: "pending" },
-    { num: "04", name: "Register LP NFT", status: "pending" },
-    { num: "05", name: "Authorize Agent", status: "pending" },
-  ]);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [btnText, setBtnText] = useState("CREATE VAULT (SIGN TX)");
+  const [step, setStep] = useState(0);
+  const [vaultAddress, setVaultAddress] = useState<string | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [selectedPosition, setSelectedPosition] = useState<bigint | null>(null);
+  const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [status, setStatus] = useState("");
 
-  const { writeContract, data: hash } = useWriteContract();
+  const { writeContract, data: hash, isPending } = useWriteContract();
   const { isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  function markDone(idx: number) {
-    setSteps(prev => prev.map((s, i) => {
-      if (i === idx) return { ...s, status: "done" };
-      if (i === idx + 1) return { ...s, status: "ready" };
-      return s;
-    }));
-  }
+  const client = createPublicClient({
+    transport: http("https://node.mainnet.etherlink.com"),
+  });
 
-  async function handleStep() {
-    if (currentStep === 0) {
-      setBtnText("SIGNING...");
-      try {
-        writeContract({
-          address: FACTORY_ADDRESS as `0x${string}`,
-          abi: FACTORY_ABI,
-          functionName: "createVault",
-          args: [AGENT_WALLET as `0x${string}`, strategy],
-        });
-        markDone(1);
-        setCurrentStep(1);
-        setBtnText("REGISTER LP NFT (SIGN TX)");
-      } catch (e) {
-        setBtnText("CREATE VAULT (RETRY)");
+  // Fetch user's LP positions from Position Manager
+  async function fetchPositions() {
+    if (!address) return;
+    setLoading(true);
+    setStatus("Scanning your LP positions...");
+    try {
+      const balance = await client.readContract({
+        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: [{ name: "balanceOf", type: "function", inputs: [{ name: "owner", type: "address" }], outputs: [{ name: "", type: "uint256" }], stateMutability: "view" }],
+        functionName: "balanceOf",
+        args: [address],
+      }) as bigint;
+
+      const found: Position[] = [];
+      for (let i = 0n; i < balance; i++) {
+        const tokenId = await client.readContract({
+          address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+          abi: [{ name: "tokenOfOwnerByIndex", type: "function", inputs: [{ name: "owner", type: "address" }, { name: "index", type: "uint256" }], outputs: [{ name: "", type: "uint256" }], stateMutability: "view" }],
+          functionName: "tokenOfOwnerByIndex",
+          args: [address, i],
+        }) as bigint;
+
+        const pos = await client.readContract({
+          address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+          abi: [{ name: "positions", type: "function", inputs: [{ name: "tokenId", type: "uint256" }], outputs: [{ name: "nonce", type: "uint96" }, { name: "operator", type: "address" }, { name: "token0", type: "address" }, { name: "token1", type: "address" }, { name: "fee", type: "uint24" }, { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" }, { name: "liquidity", type: "uint128" }, { name: "feeGrowthInside0LastX128", type: "uint256" }, { name: "feeGrowthInside1LastX128", type: "uint256" }, { name: "tokensOwed0", type: "uint128" }, { name: "tokensOwed1", type: "uint128" }], stateMutability: "view" }],
+          functionName: "positions",
+          args: [tokenId],
+        }) as any;
+
+        if (pos.liquidity > 0n) {
+          found.push({
+            tokenId,
+            token0: pos.token0,
+            token1: pos.token1,
+            liquidity: pos.liquidity,
+          });
+        }
       }
-      return;
-    }
 
-    if (currentStep === 1) {
-      markDone(2);
-      setCurrentStep(2);
-      setBtnText("AUTHORIZE AGENT (SIGN TX)");
-      return;
+      setPositions(found);
+      if (found.length === 0) {
+        setStatus("No LP positions found. Add liquidity on Oku first.");
+      } else {
+        setStatus(`Found ${found.length} LP position(s). Select one to protect.`);
+      }
+    } catch (e) {
+      setStatus("Error scanning positions. Try again.");
     }
+    setLoading(false);
+  }
 
-    if (currentStep === 2) {
-      markDone(3);
-      setCurrentStep(3);
-      setBtnText("AUTHORIZE AGENT (SIGN TX)");
-      return;
-    }
-
-    if (currentStep === 3) {
-      markDone(4);
-      setCurrentStep(4);
-      setBtnText("✓ VAULT PROTECTED");
-      setDone(true);
+  // Step 1 — Create Vault
+  async function createVault() {
+    if (!address) return;
+    setStatus("Creating your personal vault...");
+    try {
+      writeContract({
+        address: FACTORY_ADDRESS as `0x${string}`,
+        abi: FACTORY_ABI,
+        functionName: "createVault",
+        args: [AGENT_WALLET as `0x${string}`, strategy],
+      });
+    } catch (e: any) {
+      setStatus("Error: " + e.message);
     }
   }
+
+  // Step 2 — Approve NFT transfer
+  async function approveNFT() {
+    if (!selectedPosition) return;
+    setStatus("Approving LP NFT transfer...");
+    try {
+      writeContract({
+        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: [{
+          name: "approve",
+          type: "function",
+          inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }],
+          outputs: [],
+          stateMutability: "nonpayable",
+        }],
+        functionName: "approve",
+        args: [vaultAddress as `0x${string}`, selectedPosition],
+      });
+    } catch (e: any) {
+      setStatus("Error: " + e.message);
+    }
+  }
+
+  // Step 3 — Register Position
+  async function registerPosition() {
+    if (!selectedPosition || !vaultAddress) return;
+    setStatus("Registering LP position in vault...");
+    try {
+      writeContract({
+        address: vaultAddress as `0x${string}`,
+        abi: VAULT_ABI,
+        functionName: "registerPosition",
+        args: [selectedPosition],
+      });
+    } catch (e: any) {
+      setStatus("Error: " + e.message);
+    }
+  }
+
+  // Handle tx success
+  useEffect(() => {
+    if (isSuccess) {
+      if (step === 0) {
+        setStatus("✓ Vault created! Now select your LP position to protect.");
+        setStep(1);
+        fetchPositions();
+      } else if (step === 2) {
+        setStatus("✓ NFT approved! Now registering in vault...");
+        setStep(3);
+      } else if (step === 3) {
+        setStatus("✓ Position registered! Vantaguard is now protecting your funds.");
+        setDone(true);
+      }
+    }
+  }, [isSuccess]);
 
   if (!address) return null;
 
+  const stepDefs = [
+    { num: "01", name: "Connect Wallet", status: "done" },
+    { num: "02", name: "Create Vault", status: step >= 1 ? "done" : step === 0 ? "ready" : "pending" },
+    { num: "03", name: "Select LP Position", status: step >= 2 ? "done" : step === 1 ? "ready" : "pending" },
+    { num: "04", name: "Approve NFT", status: step >= 3 ? "done" : step === 2 ? "ready" : "pending" },
+    { num: "05", name: "Register Position", status: done ? "done" : step === 3 ? "ready" : "pending" },
+  ];
+
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", padding: 32 }}>
-      <div style={{ fontSize: 9, color: "var(--muted)", letterSpacing: 4, marginBottom: 24 }}>
+      <div style={{ fontSize: 14, color: "var(--muted)", letterSpacing: 4, marginBottom: 24 }}>
         VAULT SETUP — COMPLETE ALL STEPS TO ACTIVATE PROTECTION
       </div>
 
-      <div style={{ display: "flex", gap: 0 }}>
-        {steps.map((step, i) => (
+      {/* Steps */}
+      <div style={{ display: "flex", gap: 0, marginBottom: 24 }}>
+        {stepDefs.map((s, i) => (
           <div key={i} style={{
-            flex: 1,
-            padding: 20,
+            flex: 1, padding: 20,
             border: "1px solid var(--border)",
             marginRight: -1,
-            background: step.status === "ready" ? "rgba(0,255,136,0.03)" : "transparent",
-            borderColor: step.status === "ready" ? "var(--green)" : step.status === "done" ? "var(--dim)" : "var(--border)",
+            background: s.status === "ready" ? "rgba(0,255,136,0.03)" : "transparent",
+            borderColor: s.status === "ready" ? "var(--green)" : s.status === "done" ? "var(--dim)" : "var(--border)",
           }}>
-            <div style={{ fontSize: 9, color: "var(--muted)", letterSpacing: 3, marginBottom: 8 }}>{step.num}</div>
-            <div style={{ fontSize: 11, color: step.status === "done" ? "var(--dim)" : "var(--text)", marginBottom: 4 }}>{step.name}</div>
-            <div style={{ fontSize: 9, color: step.status === "done" ? "var(--dim)" : step.status === "ready" ? "var(--green)" : "var(--muted)" }}>
-              {step.status === "done" ? "✓ DONE" : step.status === "ready" ? "READY" : "WAITING"}
+            <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 8 }}>{s.num}</div>
+            <div style={{ fontSize: 13, color: s.status === "done" ? "var(--dim)" : "var(--text)", marginBottom: 4 }}>{s.name}</div>
+            <div style={{ fontSize: 11, color: s.status === "done" ? "var(--dim)" : s.status === "ready" ? "var(--green)" : "var(--muted)" }}>
+              {s.status === "done" ? "✓ DONE" : s.status === "ready" ? "READY" : "WAITING"}
             </div>
           </div>
         ))}
       </div>
 
-      <button
-        onClick={handleStep}
-        disabled={done}
-        style={{
-          marginTop: 24,
-          background: "transparent",
-          border: "1px solid var(--green)",
-          color: done ? "var(--dim)" : "var(--green)",
-          borderColor: done ? "var(--dim)" : "var(--green)",
-          padding: "12px 32px",
-          fontFamily: "monospace",
-          fontSize: 10,
-          letterSpacing: 3,
-          cursor: done ? "not-allowed" : "pointer",
-        }}
-      >
-        {btnText}
-      </button>
+      {/* Status */}
+      {status && (
+        <div style={{ fontSize: 13, color: "var(--green)", marginBottom: 16, padding: "10px 16px", border: "1px solid var(--border)" }}>
+          {status}
+        </div>
+      )}
+
+      {/* Step 0 — Create Vault */}
+      {step === 0 && !done && (
+        <button onClick={createVault} disabled={isPending} style={{
+          background: "transparent", border: "1px solid var(--green)",
+          color: "var(--green)", padding: "14px 32px",
+          fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
+        }}>
+          {isPending ? "SIGNING..." : "CREATE VAULT (SIGN TX)"}
+        </button>
+      )}
+
+      {/* Step 1 — Select LP Position */}
+      {step === 1 && !done && (
+        <div>
+          {loading && <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>Scanning positions...</div>}
+          {positions.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              {positions.map((pos) => (
+                <div key={pos.tokenId.toString()} onClick={() => { setSelectedPosition(pos.tokenId); setStep(2); }}
+                  style={{
+                    padding: "14px 16px", border: `1px solid ${selectedPosition === pos.tokenId ? "var(--green)" : "var(--border)"}`,
+                    marginBottom: 8, cursor: "pointer", fontSize: 13,
+                    background: selectedPosition === pos.tokenId ? "rgba(0,255,136,0.05)" : "transparent",
+                  }}>
+                  <span style={{ color: "var(--green)" }}>Position #{pos.tokenId.toString()}</span>
+                  <span style={{ color: "var(--muted)", marginLeft: 16, fontSize: 11 }}>
+                    {pos.token0.slice(0, 8)}.../{pos.token1.slice(0, 8)}...
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!loading && positions.length === 0 && (
+            <button onClick={fetchPositions} style={{
+              background: "transparent", border: "1px solid var(--blue)",
+              color: "var(--blue)", padding: "14px 32px",
+              fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
+            }}>
+              SCAN MY LP POSITIONS
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Step 2 — Approve NFT */}
+      {step === 2 && !done && (
+        <button onClick={approveNFT} disabled={isPending} style={{
+          background: "transparent", border: "1px solid var(--yellow)",
+          color: "var(--yellow)", padding: "14px 32px",
+          fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
+        }}>
+          {isPending ? "SIGNING..." : "APPROVE NFT TRANSFER (SIGN TX)"}
+        </button>
+      )}
+
+      {/* Step 3 — Register Position */}
+      {step === 3 && !done && (
+        <button onClick={registerPosition} disabled={isPending} style={{
+          background: "transparent", border: "1px solid var(--green)",
+          color: "var(--green)", padding: "14px 32px",
+          fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
+        }}>
+          {isPending ? "SIGNING..." : "REGISTER POSITION (SIGN TX)"}
+        </button>
+      )}
+
+      {done && (
+        <div style={{ fontSize: 14, color: "var(--green)", padding: "16px", border: "1px solid var(--green)" }}>
+          ✓ VAULT PROTECTED — Vantaguard is now monitoring your position 24/7
+        </div>
+      )}
     </div>
   );
 }
