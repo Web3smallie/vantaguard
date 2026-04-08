@@ -25,62 +25,94 @@ export function Onboarding({ strategy }: { strategy: number }) {
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  // Fix: useMemo so client isn't recreated every render
   const client = useMemo(() => createPublicClient({
     transport: http("https://node.mainnet.etherlink.com"),
   }), []);
 
-  // Fix: hydration + localStorage recovery
   useEffect(() => {
     setMounted(true);
-    if (!address) return;
-    const savedVault = localStorage.getItem(`vanguard_vault_${address}`);
-    const savedStep = localStorage.getItem(`vanguard_step_${address}`);
-    if (savedVault) {
-      setVaultAddress(savedVault);
-      setStep(savedStep ? parseInt(savedStep) : 1);
-    }
-  }, [address]);
+  }, []);
 
-  // Persist step
-  useEffect(() => {
-    if (address && mounted) {
-      localStorage.setItem(`vanguard_step_${address}`, step.toString());
-    }
-  }, [step, address, mounted]);
-
-  // Fix: checkVault with correct args — only address
+  // On wallet connect — derive everything from chain
   useEffect(() => {
     if (!address || !mounted) return;
-    async function checkVault() {
-      try {
-        const vault = await client.readContract({
-          address: FACTORY_ADDRESS as `0x${string}`,
-          abi: [{
-            name: "getVault",
-            type: "function",
-            inputs: [{ name: "user", type: "address" }],
-            outputs: [{ name: "", type: "address" }],
-            stateMutability: "view",
-          }],
-          functionName: "getVault",
-          args: [address as `0x${string}`],
-        }) as string;
-
-        if (vault && vault !== "0x0000000000000000000000000000000000000000") {
-          setVaultAddress(vault);
-          localStorage.setItem(`vanguard_vault_${address}`, vault);
-          if (step === 0) setStep(1);
-          setStatus("✓ Vault found! Now select your LP position to protect.");
-        }
-      } catch (e) {
-        console.error("Vault check failed", e);
-      }
-    }
-    checkVault();
+    deriveStateFromChain();
   }, [address, mounted]);
 
-  // Fix: use tokenOfOwnerByIndex directly — no explorer API dependency
+  async function deriveStateFromChain() {
+    if (!address) return;
+    setStatus("Checking your vault status...");
+    try {
+      // Step 1 — check if vault exists
+      const vault = await client.readContract({
+        address: FACTORY_ADDRESS as `0x${string}`,
+        abi: [{
+          name: "getVault",
+          type: "function",
+          inputs: [{ name: "user", type: "address" }],
+          outputs: [{ name: "", type: "address" }],
+          stateMutability: "view",
+        }],
+        functionName: "getVault",
+        args: [address as `0x${string}`],
+      }) as string;
+
+      if (!vault || vault === "0x0000000000000000000000000000000000000000") {
+        // No vault — start from step 0
+        setStep(0);
+        setStatus("");
+        return;
+      }
+
+      setVaultAddress(vault);
+
+      // Step 2 — check if position is registered
+      const posRegistered = await client.readContract({
+        address: vault as `0x${string}`,
+        abi: [{
+          name: "positionRegistered",
+          type: "function",
+          inputs: [],
+          outputs: [{ name: "", type: "bool" }],
+          stateMutability: "view",
+        }],
+        functionName: "positionRegistered",
+      }) as boolean;
+
+      if (posRegistered) {
+        // Step 3 — check if funds are in vault
+        const fundsInVault = await client.readContract({
+          address: vault as `0x${string}`,
+          abi: [{
+            name: "fundsInVault",
+            type: "function",
+            inputs: [],
+            outputs: [{ name: "", type: "bool" }],
+            stateMutability: "view",
+          }],
+          functionName: "fundsInVault",
+        }) as boolean;
+
+        setDone(true);
+        if (fundsInVault) {
+          setStatus("🔒 Funds secured in vault — bunker mode active.");
+        } else {
+          setStatus("✓ Vault fully protected — Vantaguard is monitoring your position 24/7");
+        }
+        return;
+      }
+
+      // Vault exists but position not registered — go to step 1
+      setStep(1);
+      setStatus("✓ Vault found! Now select your LP position to protect.");
+      fetchPositions();
+
+    } catch (e) {
+      console.error("Chain state check failed", e);
+      setStatus("");
+    }
+  }
+
   async function fetchPositions() {
     if (!address) return;
     setLoading(true);
@@ -215,28 +247,8 @@ export function Onboarding({ strategy }: { strategy: number }) {
   useEffect(() => {
     if (!isSuccess || !address) return;
     if (step === 0) {
-      async function getNewVault() {
-        try {
-          const vault = await client.readContract({
-            address: FACTORY_ADDRESS as `0x${string}`,
-            abi: [{
-              name: "getVault",
-              type: "function",
-              inputs: [{ name: "user", type: "address" }],
-              outputs: [{ name: "", type: "address" }],
-              stateMutability: "view",
-            }],
-            functionName: "getVault",
-            args: [address as `0x${string}`],
-          }) as string;
-          setVaultAddress(vault);
-          localStorage.setItem(`vanguard_vault_${address}`, vault);
-        } catch (e) {}
-      }
-      getNewVault();
-      setStep(1);
-      setStatus("✓ Vault created! Now scan for your LP positions.");
-      fetchPositions();
+      // Vault created — re-derive from chain to get vault address
+      deriveStateFromChain();
     } else if (step === 2) {
       setStep(3);
       setStatus("✓ NFT approved! Now register it in your vault...");
@@ -250,9 +262,9 @@ export function Onboarding({ strategy }: { strategy: number }) {
 
   const stepDefs = [
     { num: "01", name: "Connect Wallet", status: "done" },
-    { num: "02", name: "Create Vault", status: step >= 1 ? "done" : step === 0 ? "ready" : "pending" },
-    { num: "03", name: "Select LP Position", status: step >= 2 ? "done" : step === 1 ? "ready" : "pending" },
-    { num: "04", name: "Approve NFT", status: step >= 3 ? "done" : step === 2 ? "ready" : "pending" },
+    { num: "02", name: "Create Vault", status: step >= 1 || done ? "done" : step === 0 ? "ready" : "pending" },
+    { num: "03", name: "Select LP Position", status: step >= 2 || done ? "done" : step === 1 ? "ready" : "pending" },
+    { num: "04", name: "Approve NFT", status: step >= 3 || done ? "done" : step === 2 ? "ready" : "pending" },
     { num: "05", name: "Register Position", status: done ? "done" : step === 3 ? "ready" : "pending" },
   ];
 
