@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { createPublicClient, http } from "viem";
 import { FACTORY_ADDRESS, FACTORY_ABI, AGENT_WALLET, VAULT_ABI, POSITION_MANAGER_ADDRESS } from "@/lib/contracts";
@@ -13,6 +13,7 @@ type Position = {
 
 export function Onboarding({ strategy }: { strategy: number }) {
   const { address } = useAccount();
+  const [mounted, setMounted] = useState(false);
   const [step, setStep] = useState(0);
   const [vaultAddress, setVaultAddress] = useState<string | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -24,12 +25,33 @@ export function Onboarding({ strategy }: { strategy: number }) {
   const { writeContract, data: hash, isPending } = useWriteContract();
   const { isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  const client = createPublicClient({
+  // Fix: useMemo so client isn't recreated every render
+  const client = useMemo(() => createPublicClient({
     transport: http("https://node.mainnet.etherlink.com"),
-  });
+  }), []);
 
+  // Fix: hydration + localStorage recovery
   useEffect(() => {
+    setMounted(true);
     if (!address) return;
+    const savedVault = localStorage.getItem(`vanguard_vault_${address}`);
+    const savedStep = localStorage.getItem(`vanguard_step_${address}`);
+    if (savedVault) {
+      setVaultAddress(savedVault);
+      setStep(savedStep ? parseInt(savedStep) : 1);
+    }
+  }, [address]);
+
+  // Persist step
+  useEffect(() => {
+    if (address && mounted) {
+      localStorage.setItem(`vanguard_step_${address}`, step.toString());
+    }
+  }, [step, address, mounted]);
+
+  // Fix: checkVault with correct args — only address
+  useEffect(() => {
+    if (!address || !mounted) return;
     async function checkVault() {
       try {
         const vault = await client.readContract({
@@ -42,44 +64,60 @@ export function Onboarding({ strategy }: { strategy: number }) {
             stateMutability: "view",
           }],
           functionName: "getVault",
-          args: [(vaultAddress || "") as `0x${string}`, selectedPosition as bigint],
+          args: [address as `0x${string}`],
         }) as string;
 
         if (vault && vault !== "0x0000000000000000000000000000000000000000") {
           setVaultAddress(vault);
-          setStep(1);
+          localStorage.setItem(`vanguard_vault_${address}`, vault);
+          if (step === 0) setStep(1);
           setStatus("✓ Vault found! Now select your LP position to protect.");
-          fetchPositions();
         }
       } catch (e) {
         console.error("Vault check failed", e);
       }
     }
     checkVault();
-  }, [address]);
+  }, [address, mounted]);
 
- async function fetchPositions() {
-  if (!address) return;
-  setLoading(true);
-  setStatus("Scanning your LP positions...");
-  try {
-    // Use Etherlink explorer API to find all NFTs from Position Manager
-    const res = await fetch(
-      `https://explorer.etherlink.com/api/v2/addresses/${address}/nft?type=ERC-721`
-    );
-    const data = await res.json();
-    const nfts = data?.items || [];
+  // Fix: use tokenOfOwnerByIndex directly — no explorer API dependency
+  async function fetchPositions() {
+    if (!address) return;
+    setLoading(true);
+    setStatus("Scanning your LP positions...");
+    try {
+      const balance = await client.readContract({
+        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+        abi: [{
+          name: "balanceOf",
+          type: "function",
+          inputs: [{ name: "owner", type: "address" }],
+          outputs: [{ type: "uint256" }],
+          stateMutability: "view",
+        }],
+        functionName: "balanceOf",
+        args: [address as `0x${string}`],
+      }) as bigint;
 
-    // Filter only Position Manager NFTs
-    const pmNfts = nfts.filter((nft: any) =>
-      nft.token?.address?.toLowerCase() === POSITION_MANAGER_ADDRESS.toLowerCase()
-    );
+      const found: Position[] = [];
 
-    const found: Position[] = [];
+      for (let i = 0; i < Number(balance); i++) {
+        const tokenId = await client.readContract({
+          address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+          abi: [{
+            name: "tokenOfOwnerByIndex",
+            type: "function",
+            inputs: [
+              { name: "owner", type: "address" },
+              { name: "index", type: "uint256" }
+            ],
+            outputs: [{ type: "uint256" }],
+            stateMutability: "view",
+          }],
+          functionName: "tokenOfOwnerByIndex",
+          args: [address as `0x${string}`, BigInt(i)],
+        }) as bigint;
 
-    for (const nft of pmNfts) {
-      const tokenId = BigInt(nft.id);
-      try {
         const pos = await client.readContract({
           address: POSITION_MANAGER_ADDRESS as `0x${string}`,
           abi: [{
@@ -106,91 +144,78 @@ export function Onboarding({ strategy }: { strategy: number }) {
           args: [tokenId],
         }) as any;
 
-        if (pos.liquidity > BigInt(0)) {
+        if (pos[7] > 0n) {
           found.push({
             tokenId,
-            token0: pos.token0,
-            token1: pos.token1,
-            liquidity: pos.liquidity,
+            token0: pos[2],
+            token1: pos[3],
+            liquidity: pos[7],
           });
         }
-      } catch (e) {
-        continue;
       }
-    }
 
-    setPositions(found);
-    if (found.length === 0) {
-      setStatus("No active LP positions found. Add liquidity on Oku first.");
-    } else {
-      setStatus("Found " + found.length + " LP position(s). Select one to protect.");
+      setPositions(found);
+      if (found.length === 0) {
+        setStatus("No active LP positions found. Add liquidity on Oku first.");
+      } else {
+        setStatus("Found " + found.length + " LP position(s). Select one to protect.");
+      }
+    } catch (e) {
+      console.error(e);
+      setStatus("Error scanning positions. Try again.");
     }
-  } catch (e) {
-    setStatus("Error scanning positions. Try again.");
-    console.error(e);
+    setLoading(false);
   }
-  setLoading(false);
- }
 
   async function createVault() {
     if (!address) return;
     setStatus("Creating your personal vault...");
-    try {
-      writeContract({
-        address: FACTORY_ADDRESS as `0x${string}`,
-        abi: FACTORY_ABI,
-        functionName: "createVault",
-        args: [AGENT_WALLET as `0x${string}`, strategy],
-        gas: BigInt(500000),
-      });
-    } catch (e: any) {
-      setStatus("Error: " + e.message);
-    }
+    writeContract({
+      address: FACTORY_ADDRESS as `0x${string}`,
+      abi: FACTORY_ABI,
+      functionName: "createVault",
+      args: [AGENT_WALLET as `0x${string}`, strategy],
+      gas: BigInt(500000),
+    });
   }
 
   async function approveNFT() {
     if (!selectedPosition || !vaultAddress) return;
     setStatus("Approving LP NFT transfer...");
-    try {
-      writeContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: [{
-          name: "approve",
-          type: "function",
-          inputs: [{ name: "to", type: "address" }, { name: "tokenId", type: "uint256" }],
-          outputs: [],
-          stateMutability: "nonpayable",
-        }],
-        functionName: "approve",
-        args: [vaultAddress as `0x${string}`, selectedPosition],
-        gas: BigInt(100000),
-      });
-    } catch (e: any) {
-      setStatus("Error: " + e.message);
-    }
+    writeContract({
+      address: POSITION_MANAGER_ADDRESS as `0x${string}`,
+      abi: [{
+        name: "approve",
+        type: "function",
+        inputs: [
+          { name: "to", type: "address" },
+          { name: "tokenId", type: "uint256" }
+        ],
+        outputs: [],
+        stateMutability: "nonpayable",
+      }] as const,
+      functionName: "approve",
+      args: [vaultAddress as `0x${string}`, selectedPosition],
+      gas: BigInt(100000),
+    });
   }
 
   async function registerPosition() {
     if (!selectedPosition || !vaultAddress) return;
     setStatus("Registering LP position in vault...");
-    try {
-      writeContract({
-        address: vaultAddress as `0x${string}`,
-        abi: VAULT_ABI,
-        functionName: "registerPosition",
-        args: [selectedPosition],
-        gas: BigInt(300000),
-      });
-    } catch (e: any) {
-      setStatus("Error: " + e.message);
-    }
+    writeContract({
+      address: vaultAddress as `0x${string}`,
+      abi: VAULT_ABI,
+      functionName: "registerPosition",
+      args: [selectedPosition],
+      gas: BigInt(300000),
+    });
   }
 
   useEffect(() => {
-    if (!isSuccess) return;
+    if (!isSuccess || !address) return;
     if (step === 0) {
       async function getNewVault() {
-        if (!address) return;
         try {
           const vault = await client.readContract({
             address: FACTORY_ADDRESS as `0x${string}`,
@@ -205,22 +230,23 @@ export function Onboarding({ strategy }: { strategy: number }) {
             args: [address as `0x${string}`],
           }) as string;
           setVaultAddress(vault);
+          localStorage.setItem(`vanguard_vault_${address}`, vault);
         } catch (e) {}
       }
       getNewVault();
-      setStatus("✓ Vault created! Now select your LP position to protect.");
       setStep(1);
+      setStatus("✓ Vault created! Now scan for your LP positions.");
       fetchPositions();
     } else if (step === 2) {
-      setStatus("✓ NFT approved! Now register it in your vault...");
       setStep(3);
+      setStatus("✓ NFT approved! Now register it in your vault...");
     } else if (step === 3) {
-      setStatus("✓ Position registered! Vantaguard is now protecting your funds.");
       setDone(true);
+      setStatus("✓ Position registered! Vantaguard is now protecting your funds.");
     }
   }, [isSuccess]);
 
-  if (!address) return null;
+  if (!mounted || !address) return null;
 
   const stepDefs = [
     { num: "01", name: "Connect Wallet", status: "done" },
@@ -286,7 +312,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
                     padding: "14px 16px",
                     border: "1px solid var(--border)",
                     marginBottom: 8, cursor: "pointer", fontSize: 13,
-                    background: "transparent",
                   }}>
                   <span style={{ color: "var(--green)" }}>Position #{pos.tokenId.toString()}</span>
                   <span style={{ color: "var(--muted)", marginLeft: 16, fontSize: 11 }}>
