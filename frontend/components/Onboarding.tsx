@@ -28,7 +28,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
     transport: http("https://node.mainnet.etherlink.com"),
   });
 
-  // Check if vault already exists when wallet connects
   useEffect(() => {
     if (!address) return;
     async function checkVault() {
@@ -43,7 +42,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
             stateMutability: "view",
           }],
           functionName: "getVault",
-          args: [(vaultAddress ?? "") as `0x${string}`, selectedPosition],
+          args: [(vaultAddress || "") as `0x${string}`, selectedPosition as bigint],
         }) as string;
 
         if (vault && vault !== "0x0000000000000000000000000000000000000000") {
@@ -59,31 +58,50 @@ export function Onboarding({ strategy }: { strategy: number }) {
     checkVault();
   }, [address]);
 
-  // Fetch LP positions
-  async function fetchPositions() {
-    if (!address) return;
-    setLoading(true);
-    setStatus("Scanning your LP positions...");
-    try {
-      const balance = await client.readContract({
-        address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-        abi: [{ name: "balanceOf", type: "function", inputs: [{ name: "owner", type: "address" }], outputs: [{ name: "", type: "uint256" }], stateMutability: "view" }],
-        functionName: "balanceOf",
-        args: [address],
-      }) as bigint;
+ async function fetchPositions() {
+  if (!address) return;
+  setLoading(true);
+  setStatus("Scanning your LP positions...");
+  try {
+    // Use Etherlink explorer API to find all NFTs from Position Manager
+    const res = await fetch(
+      `https://explorer.etherlink.com/api/v2/addresses/${address}/nft?type=ERC-721`
+    );
+    const data = await res.json();
+    const nfts = data?.items || [];
 
-      const found: Position[] = [];
-      for (let i = BigInt(0); i < balance; i++) {
-        const tokenId = await client.readContract({
-          address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-          abi: [{ name: "tokenOfOwnerByIndex", type: "function", inputs: [{ name: "owner", type: "address" }, { name: "index", type: "uint256" }], outputs: [{ name: "", type: "uint256" }], stateMutability: "view" }],
-          functionName: "tokenOfOwnerByIndex",
-          args: [address, i],
-        }) as bigint;
+    // Filter only Position Manager NFTs
+    const pmNfts = nfts.filter((nft: any) =>
+      nft.token?.address?.toLowerCase() === POSITION_MANAGER_ADDRESS.toLowerCase()
+    );
 
+    const found: Position[] = [];
+
+    for (const nft of pmNfts) {
+      const tokenId = BigInt(nft.id);
+      try {
         const pos = await client.readContract({
           address: POSITION_MANAGER_ADDRESS as `0x${string}`,
-          abi: [{ name: "positions", type: "function", inputs: [{ name: "tokenId", type: "uint256" }], outputs: [{ name: "nonce", type: "uint96" }, { name: "operator", type: "address" }, { name: "token0", type: "address" }, { name: "token1", type: "address" }, { name: "fee", type: "uint24" }, { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" }, { name: "liquidity", type: "uint128" }, { name: "feeGrowthInside0LastX128", type: "uint256" }, { name: "feeGrowthInside1LastX128", type: "uint256" }, { name: "tokensOwed0", type: "uint128" }, { name: "tokensOwed1", type: "uint128" }], stateMutability: "view" }],
+          abi: [{
+            name: "positions",
+            type: "function",
+            inputs: [{ name: "tokenId", type: "uint256" }],
+            outputs: [
+              { name: "nonce", type: "uint96" },
+              { name: "operator", type: "address" },
+              { name: "token0", type: "address" },
+              { name: "token1", type: "address" },
+              { name: "fee", type: "uint24" },
+              { name: "tickLower", type: "int24" },
+              { name: "tickUpper", type: "int24" },
+              { name: "liquidity", type: "uint128" },
+              { name: "feeGrowthInside0LastX128", type: "uint256" },
+              { name: "feeGrowthInside1LastX128", type: "uint256" },
+              { name: "tokensOwed0", type: "uint128" },
+              { name: "tokensOwed1", type: "uint128" },
+            ],
+            stateMutability: "view",
+          }],
           functionName: "positions",
           args: [tokenId],
         }) as any;
@@ -96,21 +114,24 @@ export function Onboarding({ strategy }: { strategy: number }) {
             liquidity: pos.liquidity,
           });
         }
+      } catch (e) {
+        continue;
       }
-
-      setPositions(found);
-      if (found.length === 0) {
-        setStatus("No LP positions found. Add liquidity on Oku first.");
-      } else {
-        setStatus("Found " + found.length + " LP position(s). Select one to protect.");
-      }
-    } catch (e) {
-      setStatus("Error scanning positions. Try again.");
     }
-    setLoading(false);
-  }
 
-  // Step 0 — Create Vault
+    setPositions(found);
+    if (found.length === 0) {
+      setStatus("No active LP positions found. Add liquidity on Oku first.");
+    } else {
+      setStatus("Found " + found.length + " LP position(s). Select one to protect.");
+    }
+  } catch (e) {
+    setStatus("Error scanning positions. Try again.");
+    console.error(e);
+  }
+  setLoading(false);
+ }
+
   async function createVault() {
     if (!address) return;
     setStatus("Creating your personal vault...");
@@ -127,7 +148,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
     }
   }
 
-  // Step 2 — Approve NFT
   async function approveNFT() {
     if (!selectedPosition || !vaultAddress) return;
     setStatus("Approving LP NFT transfer...");
@@ -150,7 +170,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
     }
   }
 
-  // Step 3 — Register Position
   async function registerPosition() {
     if (!selectedPosition || !vaultAddress) return;
     setStatus("Registering LP position in vault...");
@@ -167,11 +186,9 @@ export function Onboarding({ strategy }: { strategy: number }) {
     }
   }
 
-  // Handle tx success
   useEffect(() => {
     if (!isSuccess) return;
     if (step === 0) {
-      // After vault created — get vault address then scan positions
       async function getNewVault() {
         if (!address) return;
         try {
@@ -185,7 +202,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
               stateMutability: "view",
             }],
             functionName: "getVault",
-            args: [address],
+            args: [address as `0x${string}`],
           }) as string;
           setVaultAddress(vault);
         } catch (e) {}
@@ -257,7 +274,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
         <div>
           {loading && (
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
-              Scanning positions...
+              Scanning your LP positions on Etherlink...
             </div>
           )}
           {positions.length > 0 && (
@@ -279,13 +296,13 @@ export function Onboarding({ strategy }: { strategy: number }) {
               ))}
             </div>
           )}
-          {!loading && positions.length === 0 && (
+          {!loading && (
             <button onClick={fetchPositions} style={{
               background: "transparent", border: "1px solid var(--blue)",
               color: "var(--blue)", padding: "14px 32px",
               fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
             }}>
-              SCAN MY LP POSITIONS
+              {positions.length === 0 ? "SCAN MY LP POSITIONS" : "SCAN AGAIN"}
             </button>
           )}
         </div>
