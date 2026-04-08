@@ -99,25 +99,22 @@ interface INonfungiblePositionManager is IERC721 {
 
 contract UserVault {
 
-    // ── CONSTANTS ─────────────────────────────────────────────────────────────
-    uint256 public constant MAX_SLIPPAGE_BPS = 100; // 1% max slippage on redeploy
+    uint256 public constant MAX_SLIPPAGE_BPS = 100;
 
-    // ── ENUMS ─────────────────────────────────────────────────────────────────
     enum RecoveryPreference {
-        SMART_REDEPLOY,    // 0 — agent finds safest pool
-        RETURN_TO_POOL,    // 1 — return to same pool when stable
-        RETURN_TO_WALLET   // 2 — send funds to owner wallet
+        SMART_REDEPLOY,
+        RETURN_TO_POOL,
+        RETURN_TO_WALLET
     }
 
-    // ── REFLEX PROOF ──────────────────────────────────────────────────────────
-    // Stored on-chain for every ghost move. Verifiable by anyone.
     struct ReflexProof {
-        uint256 threatDetectedAt;   // block.timestamp when threat logged
-        uint256 txConfirmedAt;      // block.timestamp when emergencyExit confirmed
-        uint256 reactionBlocks;     // blocks elapsed (proxy for speed)
-        uint256 token0Secured;      // amount of token0 pulled to vault
-        uint256 token1Secured;      // amount of token1 pulled to vault
-        bytes32 proofHash;          // keccak256 of all fields — immutable fingerprint
+        uint256 threatDetectedAt;
+        uint256 txConfirmedAt;
+        uint256 reactionTime;
+        uint256 reactionBlocks;
+        uint256 token0Secured;
+        uint256 token1Secured;
+        bytes32 proofHash;
     }
 
     // ── STATE ─────────────────────────────────────────────────────────────────
@@ -127,20 +124,17 @@ contract UserVault {
     address public immutable positionManager;
     address public immutable swapRouter;
 
-    // Position data
     uint256 public lpTokenId;
     bool    public positionRegistered;
     bool    public fundsInVault;
-    bool    public bunkerMode;          // when true: no external calls allowed
+    bool    public bunkerMode;
 
-    // Saved position data
     address public savedToken0;
     address public savedToken1;
     uint24  public savedFee;
     int24   public savedTickLower;
     int24   public savedTickUpper;
 
-    // Safe pool data
     address public safePoolToken0;
     address public safePoolToken1;
     uint24  public safePoolFee;
@@ -149,32 +143,36 @@ contract UserVault {
     uint256 public redeployedTokenId;
     bool    public isRedeployed;
 
-    // Threat tracking — set by agent before calling emergencyExit
     uint256 public threatDetectedAt;
     uint256 public threatDetectedBlock;
 
-    // Reflex proof history — append only
     ReflexProof[] public reflexProofs;
-
     RecoveryPreference public recoveryPreference;
+
+    // ── NEW STATE VARIABLES ───────────────────────────────────────────────────
+    string  public lastThreatType;
+    string  public lastActionReason;
+    uint256 public executionCount;
+    bool    public autoModeEnabled;
+    uint256 public lastReactionTime; // Fix 2 — store for redeploy event
 
     // ── EVENTS ────────────────────────────────────────────────────────────────
     event PositionRegistered(uint256 indexed tokenId);
 
-    // Fired the moment agent logs a threat — before exit tx
     event ThreatDetected(
         uint256 indexed reflexId,
         uint256 threatTimestamp,
         uint256 threatBlock,
-        uint256 vibeScore
+        uint256 vibeScore,
+        string  threatType
     );
 
-    // Fired when emergencyExit() confirms — completes the proof
     event GhostMoveExecuted(
-        uint256 indexed reflexId,
-        uint256 threatDetectedAt,
-        uint256 txConfirmedAt,
-        uint256 reactionBlocks,
+        address indexed vault,
+        string  action,
+        string  threatType,
+        uint256 reactionTime,
+        uint256 blockNumber,
         uint256 token0Secured,
         uint256 token1Secured,
         bytes32 proofHash
@@ -188,6 +186,8 @@ contract UserVault {
     event PreferenceUpdated(RecoveryPreference preference);
     event SafePoolUpdated(address token0, address token1, uint24 fee);
     event AgentUpdated(address indexed newAgent);
+    event AutoModeUpdated(bool enabled);
+    event SafeVaultFallback(uint256 token0Amount, uint256 token1Amount);
 
     // ── MODIFIERS ─────────────────────────────────────────────────────────────
     modifier onlyOwner() {
@@ -203,8 +203,23 @@ contract UserVault {
         _;
     }
 
+    // Fix 3 — agent can bypass bunker for redeploy
+    modifier notInBunkerOrAgent() {
+        require(
+            !bunkerMode || msg.sender == authorizedAgent,
+            "Bunker locked"
+        );
+        _;
+    }
+
     modifier notInBunker() {
-        require(!bunkerMode, "Vault in bunker mode - no external calls");
+        require(!bunkerMode, "Vault in bunker mode");
+        _;
+    }
+
+    // Fix 5 — enforce autoModeEnabled on all agent actions
+    modifier autoModeOn() {
+        require(autoModeEnabled, "Auto mode disabled");
         _;
     }
 
@@ -222,19 +237,21 @@ contract UserVault {
         positionManager    = _positionManager;
         swapRouter         = _swapRouter;
         recoveryPreference = _preference;
+        autoModeEnabled    = true;
     }
 
     receive() external payable {}
-    function onERC721Received(
-    address,
-    address,
-    uint256,
-    bytes calldata
-) external pure returns (bytes4) {
-    return this.onERC721Received.selector;
-}
 
-    // ── STEP 1: REGISTER LP POSITION ─────────────────────────────────────────
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
+        return this.onERC721Received.selector;
+    }
+
+    // ── REGISTER LP POSITION ─────────────────────────────────────────────────
     function registerPosition(uint256 tokenId) external onlyOwner {
         require(!positionRegistered, "Position already registered");
 
@@ -260,33 +277,23 @@ contract UserVault {
         emit PositionRegistered(tokenId);
     }
 
-    // ── STEP 2A: LOG THREAT (called by agent the instant threat is detected) ──
-    /**
-     * @notice Agent calls this FIRST when Vibe Score drops below threshold.
-     *         Records the exact on-chain timestamp of threat detection.
-     *         This is what proves Vantaguard acted before humans could.
-     * @param vibeScore The score at moment of detection (for proof record).
-     */
-    function logThreat(uint256 vibeScore) external onlyAuthorized {
+    // ── LOG THREAT ────────────────────────────────────────────────────────────
+    // Fix 1 — threatType added to logThreat
+    function logThreat(uint256 vibeScore, string calldata threatType) external onlyAuthorized autoModeOn {
         require(positionRegistered, "No position registered");
         require(!fundsInVault, "Already exited");
 
         threatDetectedAt    = block.timestamp;
         threatDetectedBlock = block.number;
+        lastThreatType      = threatType;
 
-        uint256 reflexId = reflexProofs.length; // next index
+        uint256 reflexId = reflexProofs.length;
 
-        emit ThreatDetected(reflexId, block.timestamp, block.number, vibeScore);
+        emit ThreatDetected(reflexId, block.timestamp, block.number, vibeScore, threatType);
     }
 
-    // ── STEP 2B: GHOST MOVE ───────────────────────────────────────────────────
-    /**
-     * @notice Agent calls this immediately after logThreat().
-     *         Pulls ALL liquidity from pool into vault.
-     *         Activates bunker mode — zero external calls until owner decides.
-     *         Generates on-chain ReflexProof and emits GhostMoveExecuted.
-     */
-    function emergencyExit() external onlyAuthorized {
+    // ── GHOST MOVE ────────────────────────────────────────────────────────────
+    function emergencyExit() external onlyAuthorized autoModeOn {
         require(positionRegistered, "No position registered");
         require(!fundsInVault, "Funds already in vault");
         require(threatDetectedAt > 0, "Must call logThreat first");
@@ -306,60 +313,57 @@ contract UserVault {
             type(uint128).max, type(uint128).max
         );
 
-        fundsInVault = true;
+        fundsInVault     = true;
+        bunkerMode       = true;
+        executionCount++;
+        lastActionReason = "Emergency exit triggered";
 
-        // ── Activate bunker mode ───────────────────────────────────────────
-        bunkerMode = true;
         emit BunkerModeActivated();
 
-        // ── Build ReflexProof ──────────────────────────────────────────────
         uint256 bal0 = IERC20(savedToken0).balanceOf(address(this));
         uint256 bal1 = IERC20(savedToken1).balanceOf(address(this));
 
         uint256 reactionBlocks = block.number - threatDetectedBlock;
+        // Fix 1 — use timestamp for reactionTime not blocks
+        uint256 reactionTime   = block.timestamp - threatDetectedAt;
+        lastReactionTime       = reactionTime; // Fix 2 — store for redeploy
 
         bytes32 proofHash = keccak256(abi.encodePacked(
             threatDetectedAt,
             block.timestamp,
+            reactionTime,
             reactionBlocks,
             bal0,
             bal1,
             owner
         ));
 
-        ReflexProof memory proof = ReflexProof({
+        reflexProofs.push(ReflexProof({
             threatDetectedAt: threatDetectedAt,
             txConfirmedAt:    block.timestamp,
+            reactionTime:     reactionTime,
             reactionBlocks:   reactionBlocks,
             token0Secured:    bal0,
             token1Secured:    bal1,
             proofHash:        proofHash
-        });
-
-        reflexProofs.push(proof);
-
-        uint256 reflexId = reflexProofs.length - 1;
+        }));
 
         emit GhostMoveExecuted(
-            reflexId,
-            threatDetectedAt,
-            block.timestamp,
-            reactionBlocks,
+            address(this),
+            "emergencyExit",
+            lastThreatType,
+            reactionTime,
+            block.number,
             bal0,
             bal1,
             proofHash
         );
 
-        // Reset threat state for next cycle
         threatDetectedAt    = 0;
         threatDetectedBlock = 0;
     }
 
-    // ── STEP 3A: SMART REDEPLOY ───────────────────────────────────────────────
-    /**
-     * @notice Owner must explicitly deactivate bunker mode before redeploy.
-     *         Enforces maxSlippage of 1% on all minted positions.
-     */
+    // ── SET SAFE POOL ─────────────────────────────────────────────────────────
     function setSafePool(
         address _token0,
         address _token1,
@@ -375,7 +379,9 @@ contract UserVault {
         emit SafePoolUpdated(_token0, _token1, _fee);
     }
 
-    function redeployToSaferPool() external onlyAuthorized notInBunker {
+    // ── REDEPLOY TO SAFER POOL ────────────────────────────────────────────────
+    // Fix 3 — uses notInBunkerOrAgent so agent can redeploy
+    function redeployToSaferPool() external onlyAuthorized notInBunkerOrAgent {
         require(fundsInVault, "No funds in vault");
         require(safePoolToken0 != address(0), "Safe pool not set");
         require(
@@ -395,7 +401,6 @@ contract UserVault {
             bal1 = IERC20(safePoolToken1).balanceOf(address(this));
         }
 
-        // ── maxSlippage guardrail: 1% ──────────────────────────────────────
         uint256 amount0Min = (bal0 * (10000 - MAX_SLIPPAGE_BPS)) / 10000;
         uint256 amount1Min = (bal1 * (10000 - MAX_SLIPPAGE_BPS)) / 10000;
 
@@ -411,8 +416,8 @@ contract UserVault {
                 tickUpper:      safePoolTickUpper,
                 amount0Desired: bal0,
                 amount1Desired: bal1,
-                amount0Min:     amount0Min,   // 1% slippage guard
-                amount1Min:     amount1Min,   // 1% slippage guard
+                amount0Min:     amount0Min,
+                amount1Min:     amount1Min,
                 recipient:      address(this),
                 deadline:       block.timestamp + 300
             })
@@ -421,12 +426,27 @@ contract UserVault {
         redeployedTokenId = newTokenId;
         isRedeployed      = true;
         fundsInVault      = false;
+        bunkerMode        = false;
+        executionCount++;
+        lastActionReason  = "Redeployed to safer pool";
+
+        // Fix 2 — use real reactionTime from lastReactionTime
+        emit GhostMoveExecuted(
+            address(this),
+            "redeployToSaferPool",
+            lastThreatType,
+            lastReactionTime,
+            block.number,
+            bal0,
+            bal1,
+            bytes32(0)
+        );
 
         emit FundsRedeployedToSaferPool(newTokenId, safePoolToken0, safePoolToken1);
     }
 
-    // ── STEP 3B: RETURN TO ORIGINAL POOL ─────────────────────────────────────
-    function returnToOriginalPool() external onlyAuthorized notInBunker {
+    // ── RETURN TO ORIGINAL POOL ───────────────────────────────────────────────
+    function returnToOriginalPool() external onlyAuthorized notInBunkerOrAgent {
         require(fundsInVault, "No funds in vault");
         require(
             recoveryPreference == RecoveryPreference.RETURN_TO_POOL,
@@ -446,12 +466,16 @@ contract UserVault {
             lpTokenId, bal0, bal1, 0, 0, block.timestamp + 300
         );
 
-        fundsInVault = false;
+        fundsInVault     = false;
+        bunkerMode       = false;
+        executionCount++;
+        lastActionReason = "Returned to original pool";
+
         emit FundsReturnedToOriginalPool(lpTokenId);
     }
 
-    // ── STEP 3C: RETURN TO WALLET ─────────────────────────────────────────────
-    function returnToWallet() external onlyAuthorized notInBunker {
+    // ── RETURN TO WALLET ──────────────────────────────────────────────────────
+    function returnToWallet() external onlyAuthorized notInBunkerOrAgent {
         require(fundsInVault, "No funds in vault");
         require(
             recoveryPreference == RecoveryPreference.RETURN_TO_WALLET,
@@ -469,26 +493,55 @@ contract UserVault {
             require(ok, "XTZ return failed");
         }
 
-        fundsInVault = false;
+        fundsInVault     = false;
+        bunkerMode       = false;
+        executionCount++;
+        lastActionReason = "Funds returned to wallet";
+
         emit FundsReturnedToWallet(bal0, bal1);
     }
 
+    // ── SAFE VAULT FALLBACK ───────────────────────────────────────────────────
+    // Fix 4 — bunkerMode reset in fallback
+    function moveToSafeVault() external onlyAuthorized {
+        require(fundsInVault, "No funds in vault");
+
+        uint256 bal0 = IERC20(savedToken0).balanceOf(address(this));
+        uint256 bal1 = IERC20(savedToken1).balanceOf(address(this));
+
+        if (bal0 > 0) IERC20(savedToken0).transfer(owner, bal0);
+        if (bal1 > 0) IERC20(savedToken1).transfer(owner, bal1);
+
+        if (address(this).balance > 0) {
+            (bool ok, ) = owner.call{value: address(this).balance}("");
+            require(ok, "XTZ return failed");
+        }
+
+        fundsInVault     = false;
+        bunkerMode       = false; // Fix 4
+        executionCount++;
+        lastActionReason = "Redeploy failed - safe vault fallback";
+
+        emit SafeVaultFallback(bal0, bal1);
+    }
+
     // ── BUNKER MODE CONTROLS ──────────────────────────────────────────────────
-    /**
-     * @notice Only the owner can lift bunker mode.
-     *         Agent cannot override this — funds are fully owner-controlled.
-     */
     function deactivateBunker() external onlyOwner {
         require(bunkerMode, "Not in bunker mode");
         bunkerMode = false;
         emit BunkerModeDeactivated();
     }
 
-    // ── INTERNAL: SWAP FOR SAFE POOL ──────────────────────────────────────────
+    // ── AUTO MODE ─────────────────────────────────────────────────────────────
+    function setAutoMode(bool _enabled) external onlyOwner {
+        autoModeEnabled = _enabled;
+        emit AutoModeUpdated(_enabled);
+    }
+
+    // ── INTERNAL SWAP ─────────────────────────────────────────────────────────
     function _swapForSafePool(uint256 bal0, uint256 bal1) internal {
         ISwapRouter router = ISwapRouter(swapRouter);
 
-        // 1% slippage on swaps too
         uint256 out0Min = (bal0 * (10000 - MAX_SLIPPAGE_BPS)) / 10000;
         uint256 out1Min = (bal1 * (10000 - MAX_SLIPPAGE_BPS)) / 10000;
 
@@ -538,13 +591,29 @@ contract UserVault {
         emit AgentUpdated(_newAgent);
     }
 
-    // ── VIEW ──────────────────────────────────────────────────────────────────
+    // ── VIEW FUNCTIONS ────────────────────────────────────────────────────────
     function getTokenBalance(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
     }
 
     function getPreference() external view returns (RecoveryPreference) {
         return recoveryPreference;
+    }
+
+    // Fix — funds state for dashboard
+    function getFundsState() external view returns (string memory) {
+        if (fundsInVault && bunkerMode) return "SECURED";
+        if (fundsInVault) return "IN_TRANSIT";
+        return "IN_POOL";
+    }
+
+    // Fix — latest action view for frontend
+    function getLatestAction() external view returns (
+        string memory threat,
+        string memory reason,
+        uint256 executions
+    ) {
+        return (lastThreatType, lastActionReason, executionCount);
     }
 
     function getReflexProof(uint256 index) external view returns (ReflexProof memory) {
