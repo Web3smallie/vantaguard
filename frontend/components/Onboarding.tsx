@@ -43,7 +43,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
             stateMutability: "view",
           }],
           functionName: "getVault",
-          args: [address],
+          args: [(vaultAddress ?? "") as `0x${string}`, selectedPosition],
         }) as string;
 
         if (vault && vault !== "0x0000000000000000000000000000000000000000") {
