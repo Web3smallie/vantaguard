@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #060608;
+  --surface: #0c0c10;
+  --border: #1a1a22;
+  --green: #00ff88;
+  --red: #ff3355;
+  --yellow: #ffaa00;
+  --blue: #00aaff;
+  --purple: #aa88ff;
+  --dim: #333344;
+  --text: #ccccdd;
+  --muted: #44445a;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); }
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+@keyframes slideIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+@keyframes arrowPulse { 0%,100%{transform:translateX(0)} 50%{transform:translateX(4px)} }
+
+/* Fix auto scroll */
+html { scroll-behavior: auto; }
+
+/* Bigger base font */
+body { font-size: 14px; }
+
+/* Feed scroll contained */
+.feed-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+}

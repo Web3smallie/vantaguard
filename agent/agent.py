@@ -40,7 +40,6 @@ RPC_URL           = "https://node.shadownet.etherlink.com"
 REGISTRY_ADDRESS  = "0x7ac9C32E00B6Ae61DCf63f4F9694c1fCFa43CaB7"
 POSITION_MANAGER  = "0x743E03cceB4af2efA3CC76838f6E8B50B63F184c"
 SWAP_ROUTER       = "0xdD489C75be1039ec7d843A6aC2Fd658350B067Cf"
-VIBE_THRESHOLD    = 30
 POLL_INTERVAL     = 12
 GAS_BASELINE_GWEI = 0.05
 
@@ -235,7 +234,7 @@ def call_set_safe_pool(pool: dict) -> bool:
             "gas": 200_000, "gasPrice": gas_price, "chainId": w3.eth.chain_id,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
         tx(f"setSafePool: {tx_hash.hex()[:20]}...")
         w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
         success("Safe pool set on-chain")
@@ -290,7 +289,7 @@ def calculate_vibe_score() -> dict:
     vs = calculate_volatility_signal(gas_gwei)
     ls = calculate_liquidity_signal(pending_tx)
     return {
-        "vibe_score": round(gs*WEIGHT_GAS + ms*WEIGHT_MEMPOOL + vs*WEIGHT_VOLATILITY + ls*WEIGHT_LIQUIDITY, 1),
+        "vibe_score": min(100.0, round(gs*WEIGHT_GAS + ms*WEIGHT_MEMPOOL + vs*WEIGHT_VOLATILITY + ls*WEIGHT_LIQUIDITY, 1)),
         "gas_gwei":   round(gas_gwei, 4),
         "pending_tx": pending_tx,
         "signals":    {"gas": round(gs,1), "mempool": round(ms,1), "volatility": round(vs,1), "liquidity": round(ls,1)}
@@ -302,7 +301,14 @@ def calculate_vibe_score() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_intent_policy() -> dict:
-    defaults = {"strategy_mode": 2, "max_loss_pct": 5.0, "min_pool_liquidity": 50000.0, "prefer_stable": True, "user_email": None}
+    defaults = {
+        "strategy_mode": 2,
+        "max_loss_pct": 5.0,
+        "min_pool_liquidity": 50000.0,
+        "prefer_stable": True,
+        "user_email": None,
+        "vibe_threshold": 30,
+    }
     try:
         rows = requests.get(f"{SUPABASE_URL}/rest/v1/security_status?limit=1", headers=HEADERS).json()
         if not rows: return defaults
@@ -313,52 +319,113 @@ def get_intent_policy() -> dict:
             "min_pool_liquidity": float(row.get("min_pool_liquidity", defaults["min_pool_liquidity"])),
             "prefer_stable":      bool(row.get("prefer_stable",     defaults["prefer_stable"])),
             "user_email":         row.get("user_email", None),
+            "vibe_threshold":     int(row.get("vibe_threshold", 30)),
         }
     except Exception:
         return defaults
 
+
 def policy_to_action(policy: dict, vibe_score: float) -> str:
-    mode = policy["strategy_mode"]
-    if mode == 2 and vibe_score < VIBE_THRESHOLD: return "EMERGENCY_EXIT"
+    mode      = policy["strategy_mode"]
+    threshold = policy["vibe_threshold"]
+    if mode == 2 and vibe_score < threshold: return "EMERGENCY_EXIT"
     if mode == 1:
-        if vibe_score < VIBE_THRESHOLD: return "EMERGENCY_EXIT"
+        if vibe_score < threshold: return "EMERGENCY_EXIT"
         if vibe_score > 60: return "REDEPLOY"
-    if mode == 0 and vibe_score < VIBE_THRESHOLD * 0.6: return "EMERGENCY_EXIT"
+    if mode == 0 and vibe_score < threshold * 0.6: return "EMERGENCY_EXIT"
     return "HOLD"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  RESEND EMAIL
+#  RESEND EMAILS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def send_alert_email(to_email: str, vibe_score: float, reaction_ms: int, tx_hash: str, strategy_mode: int):
+def _send_email(to_email: str, subject: str, html: str):
     if not to_email: return
-    mode_label = ["Aggressive", "Stable", "Safety"][strategy_mode]
     try:
-        requests.post(
+        res = requests.post(
             RESEND_API_URL,
             headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "from":    RESEND_FROM_EMAIL,
-                "to":      [to_email],
-                "subject": "🚨 Vantaguard Ghost Move Executed — Your Funds Are Secured",
-                "html":    f"""
-                <div style="font-family:monospace;background:#0a0a0a;color:#00ff88;padding:24px;border-radius:8px;">
-                  <h2 style="color:#ff4444;">⚡ GHOST MOVE EXECUTED</h2>
-                  <p><b>Vibe Score at Trigger:</b> {vibe_score}/100</p>
-                  <p><b>Reaction Speed:</b> ⚡ {reaction_ms}ms</p>
-                  <p><b>Strategy Mode:</b> {mode_label}</p>
-                  <p><b>TX:</b> <a href="https://explorer.etherlink.com/tx/{tx_hash}" style="color:#00ff88;">{tx_hash[:20]}...</a></p>
-                  <hr style="border-color:#333;"/>
-                  <p style="color:#aaa;">Your funds have been pulled from the pool and secured in your personal vault.</p>
-                  <p style="color:#888;font-size:12px;">Vantaguard — The Reflex Layer for DeFi</p>
-                </div>
-                """
-            }
+            json={"from": RESEND_FROM_EMAIL, "to": [to_email], "subject": subject, "html": html}
         )
-        success(f"Alert email sent to {to_email}")
+        if res.status_code == 200:
+            success(f"Email sent to {to_email}")
+        else:
+            log.error(f"Resend error: {res.text}")
     except Exception as e:
-        log.error(f"Email send failed: {e}")
+        log.error(f"Email failed: {e}")
+
+
+def send_ghost_move_email(to_email: str, vibe_score: float, reaction_ms: int, tx_hash: str, strategy_mode: int):
+    mode_label = ["Aggressive", "Stable", "Safety"][strategy_mode]
+    _send_email(
+        to_email,
+        "🚨 Vantaguard — Ghost Move Executed. Your Funds Are Secured.",
+        f"""
+        <div style="font-family:monospace;background:#0a0a0a;color:#00ff88;padding:24px;border-radius:8px;">
+          <h2 style="color:#ff4444;">⚡ GHOST MOVE EXECUTED</h2>
+          <p><b>Vibe Score at Trigger:</b> {vibe_score}/100</p>
+          <p><b>Reaction Speed:</b> ⚡ {reaction_ms}ms</p>
+          <p><b>Strategy Mode:</b> {mode_label}</p>
+          <p><b>TX:</b> <a href="https://explorer.etherlink.com/tx/{tx_hash}" style="color:#00ff88;">{tx_hash[:20]}...</a></p>
+          <hr style="border-color:#333;"/>
+          <p style="color:#aaa;">Your funds have been pulled from the dangerous pool and secured in your personal vault. Vantaguard is now scanning for the safest recovery path.</p>
+          <p style="color:#888;font-size:12px;">Vantaguard — The Reflex Layer for DeFi</p>
+        </div>
+        """
+    )
+
+
+def send_redeploy_email(to_email: str, token0: str, token1: str, tx_hash: str):
+    _send_email(
+        to_email,
+        "✅ Vantaguard — Funds Redeployed to Safer Pool",
+        f"""
+        <div style="font-family:monospace;background:#0a0a0a;color:#00ff88;padding:24px;border-radius:8px;">
+          <h2 style="color:#00ff88;">✅ FUNDS REDEPLOYED</h2>
+          <p>Your funds have been moved to a safer liquidity pool.</p>
+          <p><b>New Pool:</b> {token0[:10]}... / {token1[:10]}...</p>
+          <p><b>TX:</b> <a href="https://explorer.etherlink.com/tx/{tx_hash}" style="color:#00ff88;">{tx_hash[:20]}...</a></p>
+          <hr style="border-color:#333;"/>
+          <p style="color:#aaa;">Vantaguard selected this pool based on TVL, fee tier and volatility scoring. Your position is now active and earning.</p>
+          <p style="color:#888;font-size:12px;">Vantaguard — The Reflex Layer for DeFi</p>
+        </div>
+        """
+    )
+
+
+def send_return_wallet_email(to_email: str, tx_hash: str):
+    _send_email(
+        to_email,
+        "✅ Vantaguard — Funds Returned to Your Wallet",
+        f"""
+        <div style="font-family:monospace;background:#0a0a0a;color:#00ff88;padding:24px;border-radius:8px;">
+          <h2 style="color:#00ff88;">✅ FUNDS RETURNED TO WALLET</h2>
+          <p>As per your Safety strategy, your funds have been sent directly to your wallet.</p>
+          <p><b>TX:</b> <a href="https://explorer.etherlink.com/tx/{tx_hash}" style="color:#00ff88;">{tx_hash[:20]}...</a></p>
+          <hr style="border-color:#333;"/>
+          <p style="color:#aaa;">Your funds are now fully in your control. You can re-deposit to a pool when conditions stabilize.</p>
+          <p style="color:#888;font-size:12px;">Vantaguard — The Reflex Layer for DeFi</p>
+        </div>
+        """
+    )
+
+
+def send_return_pool_email(to_email: str, tx_hash: str):
+    _send_email(
+        to_email,
+        "✅ Vantaguard — Funds Returned to Original Pool",
+        f"""
+        <div style="font-family:monospace;background:#0a0a0a;color:#00ff88;padding:24px;border-radius:8px;">
+          <h2 style="color:#00ff88;">✅ FUNDS BACK IN ORIGINAL POOL</h2>
+          <p>The pool has stabilized. Vantaguard has returned your funds to your original LP position.</p>
+          <p><b>TX:</b> <a href="https://explorer.etherlink.com/tx/{tx_hash}" style="color:#00ff88;">{tx_hash[:20]}...</a></p>
+          <hr style="border-color:#333;"/>
+          <p style="color:#aaa;">Your position is now active and earning fees again. Vantaguard continues monitoring.</p>
+          <p style="color:#888;font-size:12px;">Vantaguard — The Reflex Layer for DeFi</p>
+        </div>
+        """
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -374,7 +441,7 @@ def call_log_threat(vibe_score: float):
             "gasPrice": w3.eth.gas_price, "chainId": w3.eth.chain_id,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
         action(f"logThreat on-chain: {tx_hash.hex()[:20]}...")
         w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
         success("Threat timestamp confirmed on-chain")
@@ -424,7 +491,8 @@ def trigger_reflex(vibe_score: float, policy: dict) -> dict | None:
         log_reflex(threat_detected_ms, tx_broadcast_ms, tx_confirmed_ms,
                    reaction_speed_ms, vibe_score, strategy_mode, tx_hash.hex())
 
-        send_alert_email(user_email, vibe_score, reaction_speed_ms, tx_hash.hex(), strategy_mode)
+        # Email 1 — ghost move notification
+        send_ghost_move_email(user_email, vibe_score, reaction_speed_ms, tx_hash.hex(), strategy_mode)
 
         time.sleep(5)
         execute_recovery(policy)
@@ -448,9 +516,11 @@ def execute_recovery(policy: dict):
 
     strategy_mode = policy["strategy_mode"]
     min_liquidity = policy.get("min_pool_liquidity", 50000)
+    user_email    = policy.get("user_email")
 
     action(f"Executing recovery — Mode: {['Aggressive','Stable','Safety'][strategy_mode]}")
 
+    # ── SMART REDEPLOY (Aggressive mode) ─────────────────────────────────────
     if strategy_mode == 0:
         action("Scanning for safest pool on Etherlink...")
         safe_pool = find_safest_pool(min_tvl=min_liquidity)
@@ -464,11 +534,18 @@ def execute_recovery(policy: dict):
                     w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                     success("Funds redeployed to safer pool")
                     _ghost_redeploy = None
+
+                    # Email 2 — redeploy notification
+                    token0 = safe_pool.get("token0", {}).get("id", "")
+                    token1 = safe_pool.get("token1", {}).get("id", "")
+                    send_redeploy_email(user_email, token0, token1, tx_hash.hex())
+
                 except Exception as e:
                     log.error(f"Redeploy failed: {e}")
         else:
             log.warning("No safe pool found — funds staying in vault (bunker mode)")
 
+    # ── RETURN TO WALLET (Safety mode) ───────────────────────────────────────
     elif strategy_mode == 2:
         if _ghost_wallet:
             action("Broadcasting returnToWallet...")
@@ -478,11 +555,44 @@ def execute_recovery(policy: dict):
                 w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
                 success("Funds returned to owner wallet")
                 _ghost_wallet = None
+
+                # Email 3 — return to wallet notification
+                send_return_wallet_email(user_email, tx_hash.hex())
+
             except Exception as e:
                 log.error(f"returnToWallet failed: {e}")
 
+    # ── STABLE MODE — monitor and return when safe ────────────────────────────
     elif strategy_mode == 1:
         action("Stable mode — monitoring for pool recovery before returning...")
+
+
+def execute_return_to_pool(policy: dict):
+    """
+    Called when vibe score recovers in Stable mode.
+    Returns funds to original pool and sends email.
+    """
+    user_email = policy.get("user_email")
+    if not PRIVATE_KEY or not AGENT_WALLET:
+        return
+    try:
+        nonce     = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+        gas_price = w3.eth.gas_price
+        tx_data   = vault.functions.returnToWallet().build_transaction({
+            "from": AGENT_WALLET, "nonce": nonce,
+            "gas": 300_000, "gasPrice": gas_price, "chainId": w3.eth.chain_id,
+        })
+        signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+        tx(f"returnToOriginalPool tx: {tx_hash.hex()[:20]}...")
+        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        success("Funds returned to original pool")
+
+        # Email 4 — return to original pool notification
+        send_return_pool_email(user_email, tx_hash.hex())
+
+    except Exception as e:
+        log.error(f"returnToOriginalPool failed: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -571,9 +681,10 @@ def main():
 
             policy     = get_intent_policy()
             mode       = policy["strategy_mode"]
+            threshold  = policy["vibe_threshold"]
             action_cmd = policy_to_action(policy, score)
 
-            intent(f"Strategy: {['Aggressive','Stable','Safety'][mode]} | Decision: {action_cmd}")
+            intent(f"Strategy: {['Aggressive','Stable','Safety'][mode]} | Threshold: {threshold} | Decision: {action_cmd}")
 
             rows             = requests.get(f"{SUPABASE_URL}/rest/v1/security_status?limit=1", headers=HEADERS).json()
             dashboard_locked = rows[0]["is_locked"] if rows else False
@@ -585,13 +696,17 @@ def main():
                 push_leaderboard()
                 exit_triggered = True
 
-            elif score >= VIBE_THRESHOLD and exit_triggered:
+            elif score >= threshold and exit_triggered:
                 success(f"Vibes recovered — Score: {score}")
+                # If stable mode — return funds to original pool
+                if mode == 1:
+                    action("Stable mode recovery — returning to original pool...")
+                    execute_return_to_pool(policy)
                 push_to_dashboard(score, False, "System restored — Sentinel resuming patrol.", signals=signals)
                 exit_triggered = False
 
             elif not dashboard_locked:
-                push_to_dashboard(score, False, f"Scanning... Vibe: {score}/100 | Mode: {['Aggressive','Stable','Safety'][mode]}", signals=signals)
+                push_to_dashboard(score, False, f"Scanning... Vibe: {score}/100 | Mode: {['Aggressive','Stable','Safety'][mode]} | Threshold: {threshold}", signals=signals)
 
             else:
                 log.info("🔒 Manual lock active — agent standing by")
