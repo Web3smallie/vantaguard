@@ -36,8 +36,8 @@ RESEND_FROM_EMAIL = "onboarding@resend.dev"
 RESEND_API_URL    = "https://api.resend.com/emails"
 
 # ── ETHERLINK CONFIG ──────────────────────────────────────────────────────────
-RPC_URL           = "https://node.shadownet.etherlink.com"
-REGISTRY_ADDRESS  = "0x7ac9C32E00B6Ae61DCf63f4F9694c1fCFa43CaB7"
+RPC_URL = "https://node.mainnet.etherlink.com"
+REGISTRY_ADDRESS = "0x97286c7A5C854c64b5b0E419057fed3A7085cFa3"
 POSITION_MANAGER  = "0x743E03cceB4af2efA3CC76838f6E8B50B63F184c"
 SWAP_ROUTER       = "0xdD489C75be1039ec7d843A6aC2Fd658350B067Cf"
 POLL_INTERVAL     = 12

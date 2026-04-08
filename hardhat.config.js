@@ -14,7 +14,7 @@ module.exports = {
   },
   networks: {
     etherlink: {
-      url: "https://node.shadownet.etherlink.com",
+      url: "https://node.mainnet.etherlink.com",
       accounts: [process.env.PRIVATE_KEY],
     },
   },

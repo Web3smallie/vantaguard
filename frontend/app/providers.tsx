@@ -6,10 +6,10 @@ import "@rainbow-me/rainbowkit/styles.css";
 
 const etherlink = {
   id: 42793,
-  name: "Etherlink Shadownet",
+  name: "Etherlink",
   nativeCurrency: { name: "XTZ", symbol: "XTZ", decimals: 18 },
-  rpcUrls: { default: { http: ["https://node.shadownet.etherlink.com"] } },
-  blockExplorers: { default: { name: "Shadownet Explorer", url: "https://shadownet.explorer.etherlink.com" } },
+  rpcUrls: { default: { http: ["https://node.mainnet.etherlink.com"] } },
+  blockExplorers: { default: { name: "Etherlink Explorer", url: "https://explorer.etherlink.com" } },
 };
 
 const config = getDefaultConfig({

@@ -58,7 +58,7 @@ export function VaultStatus({ isLocked, fundsInVault, swapping, swapFrom, swapTo
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
           <span style={{ color: "var(--muted)" }}>CONTRACT</span>
-          <span style={{ fontSize: 9 }}>0x7ac9...CaB7</span>
+          <span style={{ fontSize: 9 }}>0xaCBF...b81d</span>
         </div>
       </div>
     </div>

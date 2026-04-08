@@ -16,7 +16,7 @@ async function main() {
 
   const address = await factory.getAddress();
   console.log(`✅ ShadowVaultFactory deployed to: ${address}`);
-  console.log(`🔗 Explorer: https://explorer.shadownet.etherlink.com/address/${address}`);
+  console.log(`🔗 Explorer: https://explorer.etherlink.com/address/${address}`);
 }
 
 main().catch((error) => {
