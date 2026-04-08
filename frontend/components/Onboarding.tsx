@@ -208,7 +208,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
       abi: VAULT_ABI,
       functionName: "registerPosition",
       args: [selectedPosition],
-      gas: BigInt(300000),
+      gas: BigInt(1000000),
     });
   }
 
