@@ -225,6 +225,14 @@ contract UserVault {
     }
 
     receive() external payable {}
+    function onERC721Received(
+    address,
+    address,
+    uint256,
+    bytes calldata
+) external pure returns (bytes4) {
+    return this.onERC721Received.selector;
+}
 
     // ── STEP 1: REGISTER LP POSITION ─────────────────────────────────────────
     function registerPosition(uint256 tokenId) external onlyOwner {

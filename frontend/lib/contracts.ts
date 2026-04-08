@@ -1,4 +1,4 @@
-export const FACTORY_ADDRESS = "0xaCBF04d0E3D956BC5733C2843C89879dd454b81d";
+export const FACTORY_ADDRESS = "0x014d41129bb8d1A82E93F5064B7A975fB0E595B7";
 export const AGENT_WALLET = "0x46408C26e2df32FB047D7E79020383969c196396";
 export const POSITION_MANAGER_ADDRESS = "0x743E03cceB4af2efA3CC76838f6E8B50B63F184c";
 
@@ -65,6 +65,20 @@ export const VAULT_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  {
+  inputs: [],
+  name: "positionRegistered",
+  outputs: [{ internalType: "bool", name: "", type: "bool" }],
+  stateMutability: "view",
+  type: "function",
+ },
+ {
+  inputs: [],
+  name: "fundsInVault",
+  outputs: [{ internalType: "bool", name: "", type: "bool" }],
+  stateMutability: "view",
+  type: "function",
+},
 ] as const;
 
 export const POSITION_MANAGER_ABI = [
