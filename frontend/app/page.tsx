@@ -210,12 +210,28 @@ export default function Home() {
 
   // ── SAVE WALLET ADDRESS TO SUPABASE ─────────────────────────────────────
   useEffect(() => {
-    if (!address) return;
-    supabase
+  if (!address) return;
+
+  const saveAddress = async () => {
+    const { data, error } = await supabase
+      .from("security_status")
+      .select("id")
+      .limit(1)
+      .maybeSingle();
+
+    if (error) { console.error("Fetch error:", error); return; }
+    if (!data) return;
+
+    const { error: updateError } = await supabase
       .from("security_status")
       .update({ user_address: address })
-      .eq("id", 1);
-  }, [address]);
+      .eq("id", data.id);
+
+    if (updateError) console.error("Update error:", updateError);
+  };
+
+  saveAddress();
+}, [address]);
 
   // ── POLL ACTIVITY LOG ────────────────────────────────────────────────────
   const pollActivity = useCallback(async () => {
