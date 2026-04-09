@@ -96,12 +96,11 @@ vault = None
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_user_vault_address() -> str:
-    """Get the actual vault address for the user from factory."""
     try:
-        selector = w3.keccak(text="getVault(address)")[:4].hex()
-        padded   = "000000000000000000000000" + USER_WALLET.lower().replace("0x", "")
-        data     = "0x" + selector + padded
-        result   = w3.eth.call({
+        selector   = w3.keccak(text="getVault(address)")[:4]
+        padded     = bytes.fromhex("000000000000000000000000" + USER_WALLET.lower().replace("0x", ""))
+        data       = selector + padded
+        result     = w3.eth.call({
             "to":   Web3.to_checksum_address(FACTORY_ADDRESS),
             "data": data,
         })
