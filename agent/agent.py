@@ -945,16 +945,15 @@ def main():
         )
         action(f"Vault loaded: {VAULT_ADDRESS}")
     else:
-    log.warning("No vault found yet — waiting for wallet...")
-    while True:
-        time.sleep(30)
-        VAULT_ADDRESS = get_user_vault_address()
-        if VAULT_ADDRESS:
-            vault = w3.eth.contract(address=VAULT_ADDRESS, abi=SHADOW_VAULT_ABI)
-            action(f"Vault loaded: {VAULT_ADDRESS}")
-            break
-        log.info("Still waiting for wallet address in Supabase...")
-
+        log.warning("No vault found yet — waiting for wallet...")
+        while True:
+            time.sleep(30)
+            VAULT_ADDRESS = get_user_vault_address()
+            if VAULT_ADDRESS:
+                vault = w3.eth.contract(address=VAULT_ADDRESS, abi=SHADOW_VAULT_ABI)
+                action(f"Vault loaded: {VAULT_ADDRESS}")
+                break
+            log.info("Still waiting for wallet address in Supabase...")
     action("Pre-signing all 3 ghost routes...")
     build_ghost_routes()
 
