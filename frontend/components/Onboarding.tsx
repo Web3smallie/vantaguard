@@ -228,7 +228,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
       }] as const,
       functionName: "approve",
       args: [vaultAddress as `0x${string}`, selectedPosition],
-      gas: BigInt(100000),
+      gas: BigInt(5000000),
     });
   }
 
