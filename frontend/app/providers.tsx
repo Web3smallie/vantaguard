@@ -1,8 +1,9 @@
 "use client";
 import { RainbowKitProvider, getDefaultConfig, darkTheme } from "@rainbow-me/rainbowkit";
-import { WagmiProvider } from "wagmi";
+import { WagmiProvider, useAccount } from "wagmi";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import "@rainbow-me/rainbowkit/styles.css";
+import { useEffect } from "react";
 
 const etherlink = {
   id: 42793,
@@ -21,6 +22,46 @@ const config = getDefaultConfig({
 
 const queryClient = new QueryClient();
 
+function WalletSync() {
+  const { address, isConnected } = useAccount();
+
+  useEffect(() => {
+    if (!isConnected || !address) return;
+
+    const upsertWallet = async () => {
+      try {
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/security_status`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+              Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!}`,
+              Prefer: "resolution=merge-duplicates",
+            },
+            body: JSON.stringify({
+              user_address: address,
+              last_action: "Wallet connected",
+            }),
+          }
+        );
+        if (!res.ok) {
+          console.error("Supabase wallet sync failed:", await res.text());
+        } else {
+          console.log("Wallet synced to Supabase:", address);
+        }
+      } catch (e) {
+        console.error("Wallet sync error:", e);
+      }
+    };
+
+    upsertWallet();
+  }, [address, isConnected]);
+
+  return null;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <WagmiProvider config={config}>
@@ -31,6 +72,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           borderRadius: "none",
           fontStack: "system",
         })}>
+          <WalletSync />
           {children}
         </RainbowKitProvider>
       </QueryClientProvider>

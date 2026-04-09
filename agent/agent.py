@@ -472,7 +472,7 @@ def get_intent_policy() -> dict:
     }
     try:
         rows = retry_request(lambda: requests.get(
-            f"{SUPABASE_URL}/rest/v1/security_status?limit=1",
+            f"{SUPABASE_URL}/rest/v1/security_status?limit=id.asc",
             headers=HEADERS, timeout=5
         )).json()
         if not rows: return defaults
@@ -991,7 +991,7 @@ def main():
 
             # Read rows first
             rows = retry_request(lambda: requests.get(
-                f"{SUPABASE_URL}/rest/v1/security_status?limit=1",
+                f"{SUPABASE_URL}/rest/v1/security_status?limit=id.asc",
                 headers=HEADERS, timeout=5
             )).json()
 
