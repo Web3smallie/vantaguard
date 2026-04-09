@@ -765,11 +765,7 @@ def call_log_threat(vibe_score: float, threat_type: str):
         log.error(f"logThreat failed: {e}")
 
 def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
-    global _ghost_exit, _total_exits, _best_reaction_ms
-
-    if not _ghost_exit:
-        log.error("No ghost route available")
-        return None
+    global _total_exits, _best_reaction_ms
 
     strategy_mode = policy["strategy_mode"]
     user_email    = policy.get("user_email")
@@ -784,14 +780,28 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
     confidence(f"Threat Score: {confidence_sc}% | Type: {threat_type}")
     decision("Risk threshold breached — executing emergency exit")
 
+    # Step 1 — log threat on chain
     action("Logging threat on-chain...")
     call_log_threat(vibe_score, threat_type)
     log_threat_event(VAULT_ADDRESS, threat_type, confidence_sc,
                      threat_info.get("factors", {}), block_data.get("block_number", 0))
 
-    action("Broadcasting Ghost Move — zero signing latency")
+    # Step 2 — wait for confirmation then sign fresh
+    time.sleep(3)
+    action("Signing fresh emergencyExit — zero nonce conflict")
+
     try:
-        tx_hash         = w3.eth.send_raw_transaction(bytes.fromhex(_ghost_exit.lstrip("0x")))
+        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
+        tx_data    = vault.functions.emergencyExit().build_transaction({
+            "from":     AGENT_WALLET,
+            "nonce":    nonce,
+            "gas":      1_500_000,
+            "gasPrice": w3.eth.gas_price,
+            "chainId":  CHAIN_ID,
+        })
+        signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+
         tx_broadcast_ms = int(time.time() * 1000)
         submitted_at    = datetime.now(timezone.utc).isoformat()
         tx_log(f"Ghost move broadcast: {tx_hash.hex()[:20]}...")
@@ -833,27 +843,12 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
         time.sleep(5)
         execute_recovery(policy, threat_type)
 
-        _ghost_exit = None
         build_ghost_routes()
         return receipt
 
     except Exception as e:
-        log.error(f"Reflex broadcast failed: {e}")
-        try:
-            action("Attempting moveToSafeVault fallback...")
-            nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-            tx_data = vault.functions.moveToSafeVault().build_transaction({
-                "from": AGENT_WALLET, "nonce": nonce,
-                "gas": 800_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
-            })
-            signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-            w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-            success("Safe vault fallback executed")
-        except Exception as e2:
-            log.error(f"Safe vault fallback failed: {e2}")
+        log.error(f"Emergency exit failed: {e}")
         return None
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUTO RECOVERY

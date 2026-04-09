@@ -18,4 +18,19 @@ module.exports = {
       accounts: [process.env.PRIVATE_KEY],
     },
   },
+  etherscan: {
+    apiKey: {
+      etherlink: "empty",
+    },
+    customChains: [
+      {
+        network: "etherlink",
+        chainId: 42793,
+        urls: {
+          apiURL: "https://explorer.etherlink.com/api",
+          browserURL: "https://explorer.etherlink.com",
+        },
+      },
+    ],
+  },
 };
