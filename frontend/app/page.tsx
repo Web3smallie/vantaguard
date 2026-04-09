@@ -56,7 +56,6 @@ const LOG_COLORS: Record<string, string> = {
   BLOCK:      "#888888",
 };
 
-// ── RADAR ANIMATION ───────────────────────────────────────────────────────────
 function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const angleRef  = useRef(0);
@@ -87,7 +86,6 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
 
       const color = isLocked ? "#ff3355" : vibeScore < 50 ? "#ffaa00" : "#00ff88";
 
-      // Background circles
       ctx.strokeStyle = color + "22";
       ctx.lineWidth = 1;
       for (let i = 1; i <= 4; i++) {
@@ -96,21 +94,17 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
         ctx.stroke();
       }
 
-      // Cross lines
       ctx.strokeStyle = color + "22";
       ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
 
-      // Outer ring
       ctx.strokeStyle = color + "88";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.stroke();
 
-      // Sweep
       const sweepAngle = Math.PI / 3;
-      
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(cx, cy);
@@ -123,21 +117,16 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
       ctx.fill();
       ctx.restore();
 
-      // Sweep line
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.shadowBlur = 8;
       ctx.shadowColor = color;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
-      ctx.lineTo(
-        cx + Math.cos(angleRef.current) * r,
-        cy + Math.sin(angleRef.current) * r
-      );
+      ctx.lineTo(cx + Math.cos(angleRef.current) * r, cy + Math.sin(angleRef.current) * r);
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // Center dot
       ctx.fillStyle = color;
       ctx.shadowBlur = 12;
       ctx.shadowColor = color;
@@ -146,7 +135,6 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Blips
       dots.forEach(dot => {
         dot.life = (dot.life + 0.005) % 1;
         const alpha = Math.sin(dot.life * Math.PI);
@@ -168,35 +156,28 @@ function Radar({ isLocked, vibeScore }: { isLocked: boolean; vibeScore: number }
   }, [isLocked, vibeScore]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={280}
-      height={280}
-      style={{ display: "block", margin: "0 auto" }}
-    />
+    <canvas ref={canvasRef} width={280} height={280} style={{ display: "block", margin: "0 auto" }} />
   );
 }
 
 
 export default function Home() {
-  const { isConnected } = useAccount();
+  const { isConnected, address } = useAccount();
 
-  // ── STATUS STATE ─────────────────────────────────────────────────────────
-  const [vibeScore,    setVibeScore]    = useState(0);
-  const [isLocked,     setIsLocked]     = useState(false);
-  const [strategy,     setStrategy]     = useState(2);
-  const [threshold,    setThreshold]    = useState(30);
-  const [signals,      setSignals]      = useState({ gas: 0, mempool: 0, volatility: 0, liquidity: 0 });
-  const [reactionMs,   setReactionMs]   = useState<number | null>(null);
-  const [email,        setEmail]        = useState("");
-  const [emailSaved,   setEmailSaved]   = useState(false);
-  const [reflexHistory,setReflexHistory]= useState<ReflexLog[]>([]);
-  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
-  const [latestThreat, setLatestThreat] = useState<ThreatEvent | null>(null);
-  const [vaultMetrics, setVaultMetrics] = useState<VaultMetrics | null>(null);
-  const [totalExits,   setTotalExits]   = useState(0);
-  const [cycleCount,   setCycleCount]   = useState(0);
-  const [lastActivityId, setLastActivityId] = useState(0);
+  const [vibeScore,     setVibeScore]     = useState(0);
+  const [isLocked,      setIsLocked]      = useState(false);
+  const [strategy,      setStrategy]      = useState(2);
+  const [threshold,     setThreshold]     = useState(30);
+  const [signals,       setSignals]       = useState({ gas: 0, mempool: 0, volatility: 0, liquidity: 0 });
+  const [reactionMs,    setReactionMs]    = useState<number | null>(null);
+  const [email,         setEmail]         = useState("");
+  const [emailSaved,    setEmailSaved]    = useState(false);
+  const [reflexHistory, setReflexHistory] = useState<ReflexLog[]>([]);
+  const [activityLogs,  setActivityLogs]  = useState<ActivityLog[]>([]);
+  const [latestThreat,  setLatestThreat]  = useState<ThreatEvent | null>(null);
+  const [vaultMetrics,  setVaultMetrics]  = useState<VaultMetrics | null>(null);
+  const [totalExits,    setTotalExits]    = useState(0);
+  const [cycleCount,    setCycleCount]    = useState(0);
   const feedRef = useRef<HTMLDivElement>(null);
 
   // ── POLL SECURITY STATUS ─────────────────────────────────────────────────
@@ -221,12 +202,20 @@ export default function Home() {
       liquidity:  data.signal_liquidity || 0,
     });
 
-    // Email persistence fix — load saved email from Supabase
     if (data.user_email && !emailSaved) {
       setEmail(data.user_email);
       setEmailSaved(true);
     }
   }, [emailSaved]);
+
+  // ── SAVE WALLET ADDRESS TO SUPABASE ─────────────────────────────────────
+  useEffect(() => {
+    if (!address) return;
+    supabase
+      .from("security_status")
+      .update({ user_address: address })
+      .eq("id", 1);
+  }, [address]);
 
   // ── POLL ACTIVITY LOG ────────────────────────────────────────────────────
   const pollActivity = useCallback(async () => {
@@ -294,7 +283,6 @@ export default function Home() {
     };
   }, []);
 
-  // Auto scroll feed to bottom
   useEffect(() => {
     if (feedRef.current) {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
@@ -308,21 +296,14 @@ export default function Home() {
 
   async function saveEmail() {
     if (!email || !email.includes("@")) return;
-    const { data } = await supabase
-      .from("security_status")
-      .select("id")
-      .limit(1)
-      .single();
+    const { data } = await supabase.from("security_status").select("id").limit(1).single();
     if (!data) return;
     await supabase.from("security_status").update({ user_email: email }).eq("id", data.id);
     setEmailSaved(true);
   }
 
-  // ── COMPUTED METRICS ─────────────────────────────────────────────────────
-  const fundsState    = vaultMetrics?.funds_state || "IN_POOL";
-  const tvl           = vaultMetrics?.tvl || 0;
-  const protectedAmt  = vaultMetrics?.protected_amount || 0;
-  const uptime        = Math.floor((Date.now() / 1000 - (Date.now() / 1000 - cycleCount * 12)) / 60);
+  const fundsState       = vaultMetrics?.funds_state || "IN_POOL";
+  const tvl              = vaultMetrics?.tvl || 0;
   const lossPreventedPct = latestThreat?.factors
     ? Math.min(45, Object.values(latestThreat.factors).reduce((a, b) => a + b, 0) / 4)
     : 0;
@@ -333,8 +314,8 @@ export default function Home() {
     fundsState === "IN_TRANSIT" ? "var(--blue)"   :
     "var(--green)";
 
-  const strategies    = ["AGGRESSIVE", "STABLE", "SAFETY"];
-  const strategyDesc  = [
+  const strategies   = ["AGGRESSIVE", "STABLE", "SAFETY"];
+  const strategyDesc = [
     "Scan & redeploy to safest pool",
     "Wait, return to original pool",
     "Return funds to wallet immediately",
@@ -367,7 +348,6 @@ export default function Home() {
     <div style={{ minHeight: "100vh" }}>
       <Header isLocked={isLocked} />
 
-      {/* Tagline */}
       <div style={{
         textAlign: "center", padding: "16px 32px", fontSize: 15,
         color: "var(--muted)", borderBottom: "1px solid var(--border)",
@@ -379,7 +359,6 @@ export default function Home() {
 
       <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
 
-        {/* Onboarding */}
         {isConnected && <Onboarding strategy={strategy} />}
 
         {/* ── KEY METRICS ROW ─────────────────────────────────────────── */}
@@ -398,15 +377,11 @@ export default function Home() {
           </div>
           <div style={metricBox}>
             <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 2 }}>THREATS</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--red)" }}>
-              {totalExits}
-            </div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--red)" }}>{totalExits}</div>
           </div>
           <div style={metricBox}>
             <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 2 }}>AUTO ACTIONS</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--blue)" }}>
-              {totalExits * 2}
-            </div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--blue)" }}>{totalExits * 2}</div>
           </div>
           <div style={metricBox}>
             <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 2 }}>LOSS PREVENTED</div>
@@ -416,22 +391,17 @@ export default function Home() {
           </div>
           <div style={metricBox}>
             <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 2 }}>UPTIME</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--green)" }}>
-              99.9%
-            </div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--green)" }}>99.9%</div>
           </div>
           <div style={metricBox}>
             <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 2 }}>CYCLES</div>
-            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--muted)" }}>
-              {cycleCount}
-            </div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: "var(--muted)" }}>{cycleCount}</div>
           </div>
         </div>
 
         {/* ── RADAR + SENTINEL LOGS ────────────────────────────────────── */}
         <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
 
-          {/* Radar */}
           <div style={{ ...card, display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
             <div style={label}>SENTINEL RADAR</div>
             <Radar isLocked={isLocked} vibeScore={vibeScore} />
@@ -439,7 +409,6 @@ export default function Home() {
               <div style={{
                 fontSize: 14, fontWeight: 700, letterSpacing: 3,
                 color: isLocked ? "var(--red)" : vibeScore < 50 ? "var(--yellow)" : "var(--green)",
-                animation: isLocked ? "pulse 0.8s infinite" : "none",
               }}>
                 {isLocked ? "⚠ THREAT DETECTED" : "SENTINEL: MONITORING"}
               </div>
@@ -452,55 +421,37 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Sentinel Thought Logs */}
           <div style={card}>
             <div style={{
               display: "flex", justifyContent: "space-between",
               alignItems: "center", marginBottom: 12,
             }}>
               <div style={label}>SENTINEL THOUGHT LOGS</div>
-              <div style={{ fontSize: 12, color: "var(--green)", animation: "blink 1s infinite" }}>
-                ● LIVE
-              </div>
+              <div style={{ fontSize: 12, color: "var(--green)", animation: "blink 1s infinite" }}>● LIVE</div>
             </div>
-            <div
-              ref={feedRef}
-              style={{
-                height: 280,
-                overflowY: "auto",
-                overflowAnchor: "none",
-                fontFamily: "monospace",
-                fontSize: 12,
-              }}
-            >
+            <div ref={feedRef} style={{
+              height: 280, overflowY: "auto", overflowAnchor: "none",
+              fontFamily: "monospace", fontSize: 12,
+            }}>
               {activityLogs.length === 0 ? (
-                <div style={{ color: "var(--dim)", padding: 16 }}>
-                  Connecting to Etherlink Sentinel...
-                </div>
+                <div style={{ color: "var(--dim)", padding: 16 }}>Connecting to Etherlink Sentinel...</div>
               ) : (
                 activityLogs.map((log) => (
                   <div key={log.id} style={{
-                    display: "grid",
-                    gridTemplateColumns: "70px 110px 1fr",
-                    gap: 10,
-                    lineHeight: 1.8,
-                    borderBottom: "1px solid #0d0d0d",
-                    padding: "3px 0",
+                    display: "grid", gridTemplateColumns: "70px 110px 1fr",
+                    gap: 10, lineHeight: 1.8,
+                    borderBottom: "1px solid #0d0d0d", padding: "3px 0",
                   }}>
                     <span style={{ color: "#444" }}>
                       {new Date(log.created_at).toLocaleTimeString("en-US", { hour12: false })}
                     </span>
-                    <span style={{
-                      color: LOG_COLORS[log.type] || "var(--muted)",
-                      letterSpacing: 1,
-                    }}>
+                    <span style={{ color: LOG_COLORS[log.type] || "var(--muted)", letterSpacing: 1 }}>
                       [{log.type}]
                     </span>
                     <span style={{
                       color: log.type === "ALERT" || log.type === "DECISION" ? "var(--red)" :
                              log.type === "SUCCESS" || log.type === "RESULT" ? "var(--green)" :
-                             log.type === "INFERENCE" ? "#ff88aa" :
-                             "#666",
+                             log.type === "INFERENCE" ? "#ff88aa" : "#666",
                     }}>
                       {log.message}
                     </span>
@@ -515,7 +466,6 @@ export default function Home() {
         {/* ── VIBE + SIGNALS + THREAT PANEL ───────────────────────────── */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
 
-          {/* Vibe Score */}
           <div style={card}>
             <div style={label}>VIBE SCORE</div>
             <div style={{
@@ -542,7 +492,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Signal Bars */}
           <SignalBars
             gas={signals.gas}
             mempool={signals.mempool}
@@ -551,7 +500,6 @@ export default function Home() {
             threshold={threshold}
           />
 
-          {/* Threat Intelligence Panel */}
           <div style={card}>
             <div style={label}>THREAT INTELLIGENCE</div>
             {latestThreat ? (
@@ -569,8 +517,7 @@ export default function Home() {
                   </div>
                   <div style={{ height: 3, background: "#111" }}>
                     <div style={{
-                      height: "100%",
-                      width: `${latestThreat.confidence_score}%`,
+                      height: "100%", width: `${latestThreat.confidence_score}%`,
                       background: "var(--yellow)",
                     }} />
                   </div>
@@ -603,8 +550,7 @@ export default function Home() {
               </>
             ) : (
               <div style={{ fontSize: 13, color: "var(--dim)", marginTop: 16 }}>
-                No threats detected yet.
-                <br />Sentinel is monitoring...
+                No threats detected yet.<br />Sentinel is monitoring...
               </div>
             )}
           </div>
@@ -613,7 +559,6 @@ export default function Home() {
         {/* ── STRATEGY + EMAIL + DEMO ─────────────────────────────────── */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
 
-          {/* Strategy */}
           <div style={card}>
             <div style={label}>STRATEGY MODE</div>
             {strategies.map((s, i) => (
@@ -635,7 +580,6 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Email */}
           <div style={card}>
             <div style={label}>ALERT SUBSCRIPTION</div>
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 14, lineHeight: 1.8 }}>
@@ -671,11 +615,9 @@ export default function Home() {
             )}
           </div>
 
-          {/* Demo Controls */}
           <DemoControls />
         </div>
 
-        {/* ── REFLEX HISTORY ───────────────────────────────────────────── */}
         <ReflexHistory logs={reflexHistory} />
 
       </div>
