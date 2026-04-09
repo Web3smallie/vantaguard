@@ -193,7 +193,7 @@ def build_ghost_routes():
         return
     try:
         nonce           = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-        _ghost_exit     = _sign_tx(vault.functions.emergencyExit(),       nonce + 1, 1_500_000)
+        _ghost_exit     = _sign_tx(vault.functions.returnToWallet(),      nonce + 1, 1_500_000)
         _ghost_redeploy = _sign_tx(vault.functions.redeployToSaferPool(), nonce + 2, 1_500_000)
         _ghost_wallet   = _sign_tx(vault.functions.returnToWallet(),      nonce + 3, 1_500_000)
         _ghost_nonce    = nonce + 1
@@ -788,7 +788,7 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
 
     # Step 2 — wait for confirmation then sign fresh
     time.sleep(3)
-    action("Signing fresh emergencyExit — zero nonce conflict")
+    action("Signing fresh returnToWallet — zero nonce conflict")
 
     try:
        nonce = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
@@ -915,7 +915,9 @@ def execute_return_to_pool(policy):
         nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
         tx_data = vault.functions.returnToWallet().build_transaction({
             "from": AGENT_WALLET, "nonce": nonce,
-            "gas": 800_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
+            "gas": 1_500_000, 
+            "gasPrice": w3.eth.gas_price, 
+            "chainId": CHAIN_ID,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
@@ -1001,7 +1003,7 @@ def main():
 
             # Read rows first
             rows = retry_request(lambda: requests.get(
-                f"{SUPABASE_URL}/rest/v1/security_status?limit=id.asc",
+                f"{SUPABASE_URL}/rest/v1/security_status?order=id.asc",
                 headers=HEADERS, timeout=5
             )).json()
 
