@@ -207,7 +207,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
       abi: FACTORY_ABI,
       functionName: "createVault",
       args: [AGENT_WALLET as `0x${string}`, strategy],
-      gas: BigInt(1000000),
+      gas: BigInt(5000000),
     });
   }
 
