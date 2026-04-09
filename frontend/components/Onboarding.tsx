@@ -96,7 +96,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
       }
 
       if (posRegistered && !fundsInVault) {
-        // Check if there's actually liquidity in the position
         setDone(true);
         setNeedsReset(false);
         setStatus("✓ Vault fully protected — Vantaguard is monitoring your position 24/7");
@@ -104,7 +103,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
       }
 
       if (!posRegistered && vault !== "0x0000000000000000000000000000000000000000") {
-        // Vault exists, no position — could need reset or fresh register
         setNeedsReset(false);
         setDone(false);
         setStep(1);
@@ -389,8 +387,17 @@ export function Onboarding({ strategy }: { strategy: number }) {
       )}
 
       {done && !needsReset && (
-        <div style={{ fontSize: 14, color: "var(--green)", padding: "16px", border: "1px solid var(--green)" }}>
-          ✓ VAULT PROTECTED — Vantaguard is now monitoring your position 24/7
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 14, color: "var(--green)", padding: "16px", border: "1px solid var(--green)" }}>
+            ✓ VAULT PROTECTED — Vantaguard is now monitoring your position 24/7
+          </div>
+          <button onClick={() => { setDone(false); setStep(1); fetchPositions(); }} style={{
+            background: "transparent", border: "1px solid var(--muted)",
+            color: "var(--muted)", padding: "10px 24px",
+            fontFamily: "monospace", fontSize: 12, letterSpacing: 2, cursor: "pointer",
+          }}>
+            UPDATE LP POSITION
+          </button>
         </div>
       )}
 
