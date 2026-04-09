@@ -98,18 +98,24 @@ vault = None
 def get_user_vault_address() -> str:
     try:
         data   = bytes.fromhex("56c4b4c5" + "000000000000000000000000" + USER_WALLET.lower().replace("0x", ""))
+        log.info(f"Calling factory: {FACTORY_ADDRESS}")
+        log.info(f"For user wallet: {USER_WALLET}")
         result = w3.eth.call({
             "to":   Web3.to_checksum_address(FACTORY_ADDRESS),
             "data": data,
             "from": Web3.to_checksum_address(AGENT_WALLET),
         })
+        log.info(f"Raw result: {result.hex()}")
         vault_addr = "0x" + result.hex()[-40:]
         log.info(f"User vault address: {vault_addr}")
+        if vault_addr == "0x0000000000000000000000000000000000000000":
+            log.error("Vault not found for this wallet")
+            return ""
         return Web3.to_checksum_address(vault_addr)
     except Exception as e:
         log.error(f"Failed to get vault address: {e}")
         return ""
-        
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  RETRY WRAPPER
 # ══════════════════════════════════════════════════════════════════════════════
