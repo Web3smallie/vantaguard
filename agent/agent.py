@@ -68,6 +68,7 @@ VAULT_ADDRESS      = ""  # loaded at startup
 # ── SHADOWVAULT ABI ───────────────────────────────────────────────────────────
 SHADOW_VAULT_ABI = [
     {"inputs": [{"internalType": "uint256", "name": "vibeScore", "type": "uint256"}, {"internalType": "string", "name": "threatType", "type": "string"}], "name": "logThreat", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+    {"inputs": [], "name": "emergencyExit", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [], "name": "returnToOriginalPool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [{"internalType": "address", "name": "_token0", "type": "address"}, {"internalType": "address", "name": "_token1", "type": "address"}, {"internalType": "uint24", "name": "_fee", "type": "uint24"}, {"internalType": "int24", "name": "_tickLower", "type": "int24"}, {"internalType": "int24", "name": "_tickUpper", "type": "int24"}], "name": "setSafePool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [], "name": "redeployToSaferPool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
@@ -786,16 +787,36 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
     log_threat_event(VAULT_ADDRESS, threat_type, confidence_sc,
                      threat_info.get("factors", {}), block_data.get("block_number", 0))
 
-    # Step 2 — wait for confirmation then sign fresh
+    # Step 2 — emergencyExit first (pulls LP into vault)
     time.sleep(3)
-    action("Signing fresh returnToWallet — zero nonce conflict")
+    action("Signing fresh emergencyExit — pulling LP into vault")
+
+    try:
+        nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
+        tx_data = vault.functions.emergencyExit().build_transaction({
+            "from":     AGENT_WALLET,
+            "nonce":    nonce,
+            "gas":      1_500_000,
+            "gasPrice": w3.eth.gas_price,
+            "chainId":  CHAIN_ID,
+        })
+        signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+        tx_log(f"emergencyExit broadcast: {tx_hash.hex()[:20]}...")
+        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+        success("LP pulled into vault — funds secured")
+    except Exception as e:
+        log.error(f"emergencyExit failed: {e}")
+        return None
+
+    # Step 3 — now execute recovery based on preference
+    time.sleep(3)
+    action("Executing recovery based on preference...")
 
     try:
         nonce = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
 
-        # pick the correct function based on recovery preference
-        preference = policy.get("recovery_preference", 2)  # default: RETURN_TO_WALLET
-
+        preference = policy.get("recovery_preference", 2)
         if preference == 0:
             exit_fn = vault.functions.redeployToSaferPool()
         elif preference == 1:
