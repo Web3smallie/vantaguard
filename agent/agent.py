@@ -96,19 +96,18 @@ vault = None
 
 def get_user_vault_address() -> str:
     try:
-        # Read user wallet from Supabase
         rows = requests.get(
             f"{SUPABASE_URL}/rest/v1/security_status?limit=1",
             headers=HEADERS, timeout=5
         ).json()
         if not rows or not rows[0].get("user_address"):
-            log.error("No user_address in Supabase — wallet not connected to dashboard yet")
+            log.error("No user_address in Supabase")
             return ""
-        
+
         user_wallet = rows[0]["user_address"]
         log.info(f"User wallet from Supabase: {user_wallet}")
 
-        data = bytes.fromhex("56c4b4c5" + "000000000000000000000000" + user_wallet.lower().replace("0x", ""))
+        data = bytes.fromhex("0eb9af38" + "000000000000000000000000" + user_wallet.lower().replace("0x", ""))
         result = w3.eth.call({
             "to":   Web3.to_checksum_address(FACTORY_ADDRESS),
             "data": data,
