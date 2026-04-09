@@ -23,7 +23,7 @@ log = logging.getLogger("vantaguard")
 log.addHandler(handler)
 log.setLevel(logging.INFO)
 
-# ── CONFIG FROM ENV ONLY (no hardcoded secrets) ───────────────────────────────
+# ── CONFIG FROM ENV ONLY ──────────────────────────────────────────────────────
 SUPABASE_URL      = os.environ["SUPABASE_URL"]
 SUPABASE_KEY      = os.environ["SUPABASE_KEY"]
 RESEND_API_KEY    = os.environ["RESEND_API_KEY"]
@@ -40,11 +40,12 @@ HEADERS = {
 }
 
 # ── ETHERLINK CONFIG ──────────────────────────────────────────────────────────
-RPC_URL       = "https://node.mainnet.etherlink.com"
-VAULT_ADDRESS = "0x044e8020E6b412835802e73Db12540435B38d870"
-OKU_API_BASE  = "https://omni.icarus.tools/etherlink/cush"
-POLL_INTERVAL = 12
-CHAIN_ID      = 42793
+RPC_URL          = "https://node.mainnet.etherlink.com"
+FACTORY_ADDRESS  = "0x044e8020E6b412835802e73Db12540435B38d870"
+USER_WALLET      = "0xFc1c1607a4f233B87Aadb910645BeF946C05b9aC"
+OKU_API_BASE     = "https://omni.icarus.tools/etherlink/cush"
+POLL_INTERVAL    = 12
+CHAIN_ID         = 42793
 
 # ── STATE ─────────────────────────────────────────────────────────────────────
 _ghost_exit        = None
@@ -63,6 +64,7 @@ _agent_start_time  = time.time()
 HISTORY_WINDOW     = 5
 MAX_ERRORS         = 5
 _gas_baseline_gwei = 0.1
+VAULT_ADDRESS      = ""  # loaded at startup
 
 # ── SHADOWVAULT ABI ───────────────────────────────────────────────────────────
 SHADOW_VAULT_ABI = [
@@ -85,10 +87,30 @@ SHADOW_VAULT_ABI = [
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
 
-vault = w3.eth.contract(
-    address=Web3.to_checksum_address(VAULT_ADDRESS),
-    abi=SHADOW_VAULT_ABI
-)
+# vault is initialized in main() after lookup
+vault = None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  VAULT ADDRESS LOOKUP
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_user_vault_address() -> str:
+    """Get the actual vault address for the user from factory."""
+    try:
+        selector = w3.keccak(text="getVault(address)")[:4].hex()
+        padded   = "000000000000000000000000" + USER_WALLET.lower().replace("0x", "")
+        data     = "0x" + selector + padded
+        result   = w3.eth.call({
+            "to":   Web3.to_checksum_address(FACTORY_ADDRESS),
+            "data": data,
+        })
+        vault_addr = "0x" + result.hex()[-40:]
+        log.info(f"User vault address: {vault_addr}")
+        return Web3.to_checksum_address(vault_addr)
+    except Exception as e:
+        log.error(f"Failed to get vault address: {e}")
+        return ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -96,7 +118,6 @@ vault = w3.eth.contract(
 # ══════════════════════════════════════════════════════════════════════════════
 
 def retry_request(fn, retries=3, delay=1):
-    """Retry wrapper for network calls."""
     for attempt in range(retries):
         try:
             return fn()
@@ -145,51 +166,27 @@ def block_log(msg):  log.info(f"[BLOCK]      {msg}"); _log_activity("BLOCK", msg
 #  GHOST ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _get_eip1559_gas_params() -> dict:
-    """EIP-1559 gas pricing for better execution reliability."""
-    try:
-        latest       = w3.eth.get_block("latest")
-        base_fee     = latest.get("baseFeePerGas", w3.to_wei(1, "gwei"))
-        priority_fee = w3.to_wei(2, "gwei")
-        return {
-            "maxFeePerGas":         base_fee + priority_fee * 2,
-            "maxPriorityFeePerGas": priority_fee,
-        }
-    except Exception:
-        return {"gasPrice": w3.eth.gas_price}
-
-def _estimate_gas(fn) -> int:
-    """Estimate gas for a function call with 20% buffer."""
-    try:
-        estimated = fn.estimate_gas({"from": AGENT_WALLET})
-        return int(estimated * 1.2)
-    except Exception:
-        return 800_000
-
-def _sign_tx(fn, nonce, gas=None):
-    if gas is None:
-        gas = _estimate_gas(fn)
-    gas_params = _get_eip1559_gas_params()
+def _sign_tx(fn, nonce, gas=1_500_000):
     raw_tx = fn.build_transaction({
-        "from":    AGENT_WALLET,
-        "nonce":   nonce,
-        "gas":     gas,
-        "chainId": CHAIN_ID,
-        **gas_params,
+        "from":     AGENT_WALLET,
+        "nonce":    nonce,
+        "gas":      gas,
+        "gasPrice": w3.eth.gas_price,
+        "chainId":  CHAIN_ID,
     })
     signed = w3.eth.account.sign_transaction(raw_tx, PRIVATE_KEY)
     return signed.rawTransaction.hex()
 
 def build_ghost_routes():
     global _ghost_exit, _ghost_redeploy, _ghost_wallet, _ghost_nonce
-    if not PRIVATE_KEY or not AGENT_WALLET:
-        log.error("PRIVATE_KEY / AGENT_WALLET not set")
+    if not PRIVATE_KEY or not AGENT_WALLET or not vault:
+        log.error("Cannot build ghost routes — missing keys or vault")
         return
     try:
         nonce           = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-        _ghost_exit     = _sign_tx(vault.functions.emergencyExit(),       nonce,     800_000)
-        _ghost_redeploy = _sign_tx(vault.functions.redeployToSaferPool(), nonce + 1, 800_000)
-        _ghost_wallet   = _sign_tx(vault.functions.returnToWallet(),      nonce + 2, 800_000)
+        _ghost_exit     = _sign_tx(vault.functions.emergencyExit(),       nonce,     1_500_000)
+        _ghost_redeploy = _sign_tx(vault.functions.redeployToSaferPool(), nonce + 1, 1_500_000)
+        _ghost_wallet   = _sign_tx(vault.functions.returnToWallet(),      nonce + 2, 1_500_000)
         _ghost_nonce    = nonce
         action(f"All 3 ghost routes armed — nonce {nonce}")
     except Exception as e:
@@ -243,11 +240,9 @@ def scan_block_data() -> dict:
 
 def scan_mempool() -> dict:
     try:
-        # Lightweight scan — no full transactions
         pending_block = w3.eth.get_block("pending", full_transactions=False)
         pending_count = len(pending_block.transactions)
 
-        # Only fetch full txs for sample analysis
         if pending_count > 0:
             full_block = w3.eth.get_block("pending", full_transactions=True)
             txs = full_block.transactions[:50]
@@ -373,7 +368,6 @@ def classify_threat(block_data: dict, mempool_data: dict, pool_data: dict) -> di
     if vol_ratio > 2:   factors["volume_spike"] = 20
     elif vol_ratio > 1: factors["volume_spike"] = 10
 
-    # Compound scoring for correlated signals
     if mempool_data.get("bot_detected") and factors["liquidity_drop"] > 10:
         factors["bot_activity"] += 10
 
@@ -648,7 +642,6 @@ def find_safest_pool(min_tvl: float = 50000) -> dict | None:
         if t0 == original_token0 and t1 == original_token1: continue
         s = score_pool(pool)
         scored.append((s, pool))
-        scan(f"Pool {t0[:6]}../{t1[:6]}.. Score:{s} TVL:${tvl:,.0f}")
 
     if not scored: return None
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -665,13 +658,12 @@ def call_set_safe_pool(pool: dict) -> bool:
         tick_lower = int(pool.get("tickLower", -887220))
         tick_upper = int(pool.get("tickUpper",  887220))
         action(f"Setting safe pool: {token0[:8]}../{token1[:8]}.. fee={fee}")
-        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-        gas_params = _get_eip1559_gas_params()
-        tx_data    = vault.functions.setSafePool(
+        nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+        tx_data = vault.functions.setSafePool(
             token0, token1, fee, tick_lower, tick_upper
         ).build_transaction({
             "from": AGENT_WALLET, "nonce": nonce,
-            "gas": 200_000, "chainId": CHAIN_ID, **gas_params,
+            "gas": 400_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
@@ -705,7 +697,6 @@ def _send_email(to_email, subject, html):
                 time.sleep(1)
         except Exception as e:
             log.error(f"Email failed: {e}")
-    # Fire and forget — don't block execution
     threading.Thread(target=_send, daemon=True).start()
 
 def send_ghost_move_email(to_email, vibe_score, reaction_ms, tx_hash, strategy_mode, threat_type):
@@ -751,11 +742,10 @@ def send_return_pool_email(to_email, tx_hash):
 def call_log_threat(vibe_score: float, threat_type: str):
     if not PRIVATE_KEY or not AGENT_WALLET: return
     try:
-        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-        gas_params = _get_eip1559_gas_params()
-        tx_data    = vault.functions.logThreat(int(vibe_score), threat_type).build_transaction({
+        nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+        tx_data = vault.functions.logThreat(int(vibe_score), threat_type).build_transaction({
             "from": AGENT_WALLET, "nonce": nonce,
-            "gas": 150_000, "chainId": CHAIN_ID, **gas_params,
+            "gas": 1_500_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
@@ -842,11 +832,10 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
         log.error(f"Reflex broadcast failed: {e}")
         try:
             action("Attempting moveToSafeVault fallback...")
-            nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-            gas_params = _get_eip1559_gas_params()
-            tx_data    = vault.functions.moveToSafeVault().build_transaction({
+            nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+            tx_data = vault.functions.moveToSafeVault().build_transaction({
                 "from": AGENT_WALLET, "nonce": nonce,
-                "gas": 300_000, "chainId": CHAIN_ID, **gas_params,
+                "gas": 800_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
             })
             signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
             tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
@@ -888,20 +877,6 @@ def execute_recovery(policy, threat_type):
                     send_redeploy_email(user_email, token0, token1, tx_hash.hex())
                 except Exception as e:
                     log.error(f"Redeploy failed: {e}")
-                    action("Redeploy failed - switching to SAFE VAULT")
-                    try:
-                        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-                        gas_params = _get_eip1559_gas_params()
-                        tx_data    = vault.functions.moveToSafeVault().build_transaction({
-                            "from": AGENT_WALLET, "nonce": nonce,
-                            "gas": 300_000, "chainId": CHAIN_ID, **gas_params,
-                        })
-                        signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
-                        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-                        w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
-                        success("Safe vault fallback executed")
-                    except Exception as e2:
-                        log.error(f"Safe vault fallback failed: {e2}")
 
     elif strategy_mode == 2:
         if _ghost_wallet:
@@ -923,11 +898,10 @@ def execute_return_to_pool(policy):
     user_email = policy.get("user_email")
     if not PRIVATE_KEY or not AGENT_WALLET: return
     try:
-        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-        gas_params = _get_eip1559_gas_params()
-        tx_data    = vault.functions.returnToWallet().build_transaction({
+        nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+        tx_data = vault.functions.returnToWallet().build_transaction({
             "from": AGENT_WALLET, "nonce": nonce,
-            "gas": 300_000, "chainId": CHAIN_ID, **gas_params,
+            "gas": 800_000, "gasPrice": w3.eth.gas_price, "chainId": CHAIN_ID,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
@@ -944,7 +918,7 @@ def execute_return_to_pool(policy):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    global _cycle_count, _error_count
+    global _cycle_count, _error_count, vault, VAULT_ADDRESS
 
     log.info("=" * 60)
     log.info("  VANTAGUARD SENTINEL ONLINE")
@@ -955,9 +929,22 @@ def main():
     action("Real-time block scanning initialized")
     action("Mempool intelligence layer ready")
     action("Threat classification engine armed")
-    action("Pre-signing all 3 ghost routes...")
 
     update_gas_baseline()
+
+    # ── LOAD USER VAULT FROM FACTORY ─────────────────────────────────────────
+    VAULT_ADDRESS = get_user_vault_address()
+    if VAULT_ADDRESS:
+        vault = w3.eth.contract(
+            address=VAULT_ADDRESS,
+            abi=SHADOW_VAULT_ABI
+        )
+        action(f"Vault loaded: {VAULT_ADDRESS}")
+    else:
+        log.error("Could not load user vault — exiting")
+        return
+
+    action("Pre-signing all 3 ghost routes...")
     build_ghost_routes()
 
     exit_triggered = False
@@ -1010,7 +997,6 @@ def main():
 
             intent(f"Strategy: {['Aggressive','Stable','Safety'][mode]} | Threshold: {threshold} | Decision: {action_cmd}")
 
-            # Fix 7 — use is_locked from policy (already read from Supabase)
             if action_cmd == "EMERGENCY_EXIT" and not exit_triggered and not is_locked:
                 trigger_reflex(score, policy, threat_info, block_data)
                 exit_triggered = True
