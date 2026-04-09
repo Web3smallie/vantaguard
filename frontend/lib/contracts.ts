@@ -79,6 +79,13 @@ export const VAULT_ABI = [
   stateMutability: "view",
   type: "function",
 },
+{
+  inputs: [],
+  name: "resetPosition",
+  outputs: [],
+  stateMutability: "nonpayable",
+  type: "function",
+},
 ] as const;
 
 export const POSITION_MANAGER_ABI = [

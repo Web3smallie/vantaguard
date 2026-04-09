@@ -20,6 +20,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
   const [selectedPosition, setSelectedPosition] = useState<bigint | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [needsReset, setNeedsReset] = useState(false);
   const [status, setStatus] = useState("");
 
   const { writeContract, data: hash, isPending } = useWriteContract();
@@ -33,7 +34,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
     setMounted(true);
   }, []);
 
-  // On wallet connect — derive everything from chain
   useEffect(() => {
     if (!address || !mounted) return;
     deriveStateFromChain();
@@ -43,7 +43,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
     if (!address) return;
     setStatus("Checking your vault status...");
     try {
-      // Step 1 — check if vault exists
       const vault = await client.readContract({
         address: FACTORY_ADDRESS as `0x${string}`,
         abi: [{
@@ -58,7 +57,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
       }) as string;
 
       if (!vault || vault === "0x0000000000000000000000000000000000000000") {
-        // No vault — start from step 0
         setStep(0);
         setStatus("");
         return;
@@ -66,7 +64,6 @@ export function Onboarding({ strategy }: { strategy: number }) {
 
       setVaultAddress(vault);
 
-      // Step 2 — check if position is registered
       const posRegistered = await client.readContract({
         address: vault as `0x${string}`,
         abi: [{
@@ -79,33 +76,42 @@ export function Onboarding({ strategy }: { strategy: number }) {
         functionName: "positionRegistered",
       }) as boolean;
 
-      if (posRegistered) {
-        // Step 3 — check if funds are in vault
-        const fundsInVault = await client.readContract({
-          address: vault as `0x${string}`,
-          abi: [{
-            name: "fundsInVault",
-            type: "function",
-            inputs: [],
-            outputs: [{ name: "", type: "bool" }],
-            stateMutability: "view",
-          }],
-          functionName: "fundsInVault",
-        }) as boolean;
+      const fundsInVault = await client.readContract({
+        address: vault as `0x${string}`,
+        abi: [{
+          name: "fundsInVault",
+          type: "function",
+          inputs: [],
+          outputs: [{ name: "", type: "bool" }],
+          stateMutability: "view",
+        }],
+        functionName: "fundsInVault",
+      }) as boolean;
 
+      if (posRegistered && fundsInVault) {
         setDone(true);
-        if (fundsInVault) {
-          setStatus("🔒 Funds secured in vault — bunker mode active.");
-        } else {
-          setStatus("✓ Vault fully protected — Vantaguard is monitoring your position 24/7");
-        }
+        setNeedsReset(false);
+        setStatus("🔒 Funds secured in vault — bunker mode active.");
         return;
       }
 
-      // Vault exists but position not registered — go to step 1
-      setStep(1);
-      setStatus("✓ Vault found! Now select your LP position to protect.");
-      fetchPositions();
+      if (posRegistered && !fundsInVault) {
+        // Check if there's actually liquidity in the position
+        setDone(true);
+        setNeedsReset(false);
+        setStatus("✓ Vault fully protected — Vantaguard is monitoring your position 24/7");
+        return;
+      }
+
+      if (!posRegistered && vault !== "0x0000000000000000000000000000000000000000") {
+        // Vault exists, no position — could need reset or fresh register
+        setNeedsReset(false);
+        setDone(false);
+        setStep(1);
+        setStatus("✓ Vault found! Now select your LP position to protect.");
+        fetchPositions();
+        return;
+      }
 
     } catch (e) {
       console.error("Chain state check failed", e);
@@ -244,17 +250,34 @@ export function Onboarding({ strategy }: { strategy: number }) {
     });
   }
 
+  async function resetPosition() {
+    if (!vaultAddress) return;
+    setStatus("Resetting position...");
+    writeContract({
+      address: vaultAddress as `0x${string}`,
+      abi: VAULT_ABI,
+      functionName: "resetPosition",
+      gas: BigInt(500000),
+    });
+  }
+
   useEffect(() => {
     if (!isSuccess || !address) return;
     if (step === 0) {
-      // Vault created — re-derive from chain to get vault address
       deriveStateFromChain();
     } else if (step === 2) {
       setStep(3);
       setStatus("✓ NFT approved! Now register it in your vault...");
     } else if (step === 3) {
       setDone(true);
+      setNeedsReset(false);
       setStatus("✓ Position registered! Vantaguard is now protecting your funds.");
+    } else if (needsReset) {
+      setNeedsReset(false);
+      setDone(false);
+      setStep(1);
+      setStatus("✓ Position reset! Now select a new LP position.");
+      fetchPositions();
     }
   }, [isSuccess]);
 
@@ -298,7 +321,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
         </div>
       )}
 
-      {step === 0 && !done && (
+      {step === 0 && !done && !needsReset && (
         <button onClick={createVault} disabled={isPending} style={{
           background: "transparent", border: "1px solid var(--green)",
           color: "var(--green)", padding: "14px 32px",
@@ -308,7 +331,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
         </button>
       )}
 
-      {step === 1 && !done && (
+      {step === 1 && !done && !needsReset && (
         <div>
           {loading && (
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 16 }}>
@@ -345,7 +368,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
         </div>
       )}
 
-      {step === 2 && !done && (
+      {step === 2 && !done && !needsReset && (
         <button onClick={approveNFT} disabled={isPending} style={{
           background: "transparent", border: "1px solid var(--yellow)",
           color: "var(--yellow)", padding: "14px 32px",
@@ -355,7 +378,7 @@ export function Onboarding({ strategy }: { strategy: number }) {
         </button>
       )}
 
-      {step === 3 && !done && (
+      {step === 3 && !done && !needsReset && (
         <button onClick={registerPosition} disabled={isPending} style={{
           background: "transparent", border: "1px solid var(--green)",
           color: "var(--green)", padding: "14px 32px",
@@ -365,9 +388,24 @@ export function Onboarding({ strategy }: { strategy: number }) {
         </button>
       )}
 
-      {done && (
+      {done && !needsReset && (
         <div style={{ fontSize: 14, color: "var(--green)", padding: "16px", border: "1px solid var(--green)" }}>
           ✓ VAULT PROTECTED — Vantaguard is now monitoring your position 24/7
+        </div>
+      )}
+
+      {needsReset && (
+        <div>
+          <div style={{ fontSize: 14, color: "var(--yellow)", padding: "16px", border: "1px solid var(--yellow)", marginBottom: 12 }}>
+            ⚠ Funds returned to wallet — reset your position to re-register a new LP NFT
+          </div>
+          <button onClick={resetPosition} disabled={isPending} style={{
+            background: "transparent", border: "1px solid var(--yellow)",
+            color: "var(--yellow)", padding: "14px 32px",
+            fontFamily: "monospace", fontSize: 13, letterSpacing: 3, cursor: "pointer",
+          }}>
+            {isPending ? "RESETTING..." : "RESET POSITION"}
+          </button>
         </div>
       )}
     </div>
