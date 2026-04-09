@@ -192,13 +192,12 @@ def build_ghost_routes():
         log.error("Cannot build ghost routes — missing keys or vault")
         return
     try:
-       nonce           = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
-       _ghost_exit     = _sign_tx(vault.functions.emergencyExit(),       nonce + 1, 1_500_000)
-       _ghost_redeploy = _sign_tx(vault.functions.redeployToSaferPool(), nonce + 2, 1_500_000)
-       _ghost_wallet   = _sign_tx(vault.functions.returnToWallet(),      nonce + 3, 1_500_000)
-       _ghost_nonce    = nonce + 1
-       _ghost_nonce    = nonce
-        action(f"All 3 ghost routes armed — nonce {nonce}")
+        nonce           = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
+        _ghost_exit     = _sign_tx(vault.functions.emergencyExit(),       nonce + 1, 1_500_000)
+        _ghost_redeploy = _sign_tx(vault.functions.redeployToSaferPool(), nonce + 2, 1_500_000)
+        _ghost_wallet   = _sign_tx(vault.functions.returnToWallet(),      nonce + 3, 1_500_000)
+        _ghost_nonce    = nonce + 1
+        action(f"All 3 ghost routes armed — nonce {nonce + 1}")
     except Exception as e:
         log.error(f"Ghost route build failed: {e}")
         _ghost_exit = None
