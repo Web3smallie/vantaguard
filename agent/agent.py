@@ -988,12 +988,17 @@ def main():
             score     = vibe_data["vibe_score"]
             signals   = vibe_data["signals"]
 
+            # Read rows first
+            rows = retry_request(lambda: requests.get(
+                f"{SUPABASE_URL}/rest/v1/security_status?limit=1",
+                headers=HEADERS, timeout=5
+            )).json()
+
             # Demo mode override
             if rows and rows[0].get("demo_mode", False):
                 score = 20
                 action("DEMO MODE ACTIVE — vibe forced to 20")
 
-            log.info(f"Vibe:{score} ...")
             log.info(f"Vibe:{score} | Gas:{signals['gas']} | Mem:{signals['mempool']} | Vol:{signals['volatility']} | Liq:{signals['liquidity']}")
 
             threat_info = classify_threat(block_data, mempool_data, pool_data)
