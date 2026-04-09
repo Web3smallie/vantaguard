@@ -97,10 +97,9 @@ vault = None
 
 def get_user_vault_address() -> str:
     try:
-        selector   = w3.keccak(text="getVault(address)")[:4]
-        padded     = bytes.fromhex("000000000000000000000000" + USER_WALLET.lower().replace("0x", ""))
-        data       = selector + padded
-        result     = w3.eth.call({
+        # getVault(address) selector = 0x56c4b4c5
+        data   = bytes.fromhex("56c4b4c5" + "000000000000000000000000" + USER_WALLET.lower().replace("0x", ""))
+        result = w3.eth.call({
             "to":   Web3.to_checksum_address(FACTORY_ADDRESS),
             "data": data,
         })
@@ -110,7 +109,6 @@ def get_user_vault_address() -> str:
     except Exception as e:
         log.error(f"Failed to get vault address: {e}")
         return ""
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  RETRY WRAPPER
