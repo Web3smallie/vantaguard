@@ -791,11 +791,11 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
     action("Signing fresh returnToWallet — zero nonce conflict")
 
     try:
-       nonce = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
+        nonce = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
 
         # pick the correct function based on recovery preference
         preference = policy.get("recovery_preference", 2)  # default: RETURN_TO_WALLET
-        
+
         if preference == 0:
             exit_fn = vault.functions.redeployToSaferPool()
         elif preference == 1:
@@ -916,8 +916,8 @@ def execute_return_to_pool(policy):
         nonce   = w3.eth.get_transaction_count(AGENT_WALLET, "pending")
         tx_data = vault.functions.returnToWallet().build_transaction({
             "from": AGENT_WALLET, "nonce": nonce,
-            "gas": 1_500_000, 
-            "gasPrice": w3.eth.gas_price, 
+            "gas": 1_500_000,
+            "gasPrice": w3.eth.gas_price,
             "chainId": CHAIN_ID,
         })
         signed  = w3.eth.account.sign_transaction(tx_data, PRIVATE_KEY)
