@@ -68,7 +68,7 @@ VAULT_ADDRESS      = ""  # loaded at startup
 # ── SHADOWVAULT ABI ───────────────────────────────────────────────────────────
 SHADOW_VAULT_ABI = [
     {"inputs": [{"internalType": "uint256", "name": "vibeScore", "type": "uint256"}, {"internalType": "string", "name": "threatType", "type": "string"}], "name": "logThreat", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
-    {"inputs": [], "name": "emergencyExit", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+    {"inputs": [], "name": "returnToOriginalPool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [{"internalType": "address", "name": "_token0", "type": "address"}, {"internalType": "address", "name": "_token1", "type": "address"}, {"internalType": "uint24", "name": "_fee", "type": "uint24"}, {"internalType": "int24", "name": "_tickLower", "type": "int24"}, {"internalType": "int24", "name": "_tickUpper", "type": "int24"}], "name": "setSafePool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [], "name": "redeployToSaferPool", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
     {"inputs": [], "name": "returnToWallet", "outputs": [], "stateMutability": "nonpayable", "type": "function"},
@@ -791,8 +791,18 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
     action("Signing fresh emergencyExit — zero nonce conflict")
 
     try:
-        nonce      = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
-        tx_data    = vault.functions.emergencyExit().build_transaction({
+       nonce = w3.eth.get_transaction_count(AGENT_WALLET, "latest")
+
+        # pick the correct function based on recovery preference
+        preference = policy.get("recovery_preference", 2)  # default: RETURN_TO_WALLET
+        if preference == 0:
+            exit_fn = vault.functions.redeployToSaferPool()
+        elif preference == 1:
+            exit_fn = vault.functions.returnToOriginalPool()
+        else:
+            exit_fn = vault.functions.returnToWallet()
+
+        tx_data = exit_fn.build_transaction({
             "from":     AGENT_WALLET,
             "nonce":    nonce,
             "gas":      1_500_000,
