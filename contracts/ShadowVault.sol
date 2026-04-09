@@ -149,15 +149,15 @@ contract UserVault {
     ReflexProof[] public reflexProofs;
     RecoveryPreference public recoveryPreference;
 
-    // ── NEW STATE VARIABLES ───────────────────────────────────────────────────
     string  public lastThreatType;
     string  public lastActionReason;
     uint256 public executionCount;
     bool    public autoModeEnabled;
-    uint256 public lastReactionTime; // Fix 2 — store for redeploy event
+    uint256 public lastReactionTime;
 
     // ── EVENTS ────────────────────────────────────────────────────────────────
     event PositionRegistered(uint256 indexed tokenId);
+    event PositionReset(address indexed user);
 
     event ThreatDetected(
         uint256 indexed reflexId,
@@ -203,7 +203,6 @@ contract UserVault {
         _;
     }
 
-    // Fix 3 — agent can bypass bunker for redeploy
     modifier notInBunkerOrAgent() {
         require(
             !bunkerMode || msg.sender == authorizedAgent,
@@ -217,7 +216,6 @@ contract UserVault {
         _;
     }
 
-    // Fix 5 — enforce autoModeEnabled on all agent actions
     modifier autoModeOn() {
         require(autoModeEnabled, "Auto mode disabled");
         _;
@@ -278,7 +276,6 @@ contract UserVault {
     }
 
     // ── LOG THREAT ────────────────────────────────────────────────────────────
-    // Fix 1 — threatType added to logThreat
     function logThreat(uint256 vibeScore, string calldata threatType) external onlyAuthorized autoModeOn {
         require(positionRegistered, "No position registered");
         require(!fundsInVault, "Already exited");
@@ -324,9 +321,8 @@ contract UserVault {
         uint256 bal1 = IERC20(savedToken1).balanceOf(address(this));
 
         uint256 reactionBlocks = block.number - threatDetectedBlock;
-        // Fix 1 — use timestamp for reactionTime not blocks
         uint256 reactionTime   = block.timestamp - threatDetectedAt;
-        lastReactionTime       = reactionTime; // Fix 2 — store for redeploy
+        lastReactionTime       = reactionTime;
 
         bytes32 proofHash = keccak256(abi.encodePacked(
             threatDetectedAt,
@@ -380,7 +376,6 @@ contract UserVault {
     }
 
     // ── REDEPLOY TO SAFER POOL ────────────────────────────────────────────────
-    // Fix 3 — uses notInBunkerOrAgent so agent can redeploy
     function redeployToSaferPool() external onlyAuthorized notInBunkerOrAgent {
         require(fundsInVault, "No funds in vault");
         require(safePoolToken0 != address(0), "Safe pool not set");
@@ -430,7 +425,6 @@ contract UserVault {
         executionCount++;
         lastActionReason  = "Redeployed to safer pool";
 
-        // Fix 2 — use real reactionTime from lastReactionTime
         emit GhostMoveExecuted(
             address(this),
             "redeployToSaferPool",
@@ -502,7 +496,6 @@ contract UserVault {
     }
 
     // ── SAFE VAULT FALLBACK ───────────────────────────────────────────────────
-    // Fix 4 — bunkerMode reset in fallback
     function moveToSafeVault() external onlyAuthorized {
         require(fundsInVault, "No funds in vault");
 
@@ -518,7 +511,7 @@ contract UserVault {
         }
 
         fundsInVault     = false;
-        bunkerMode       = false; // Fix 4
+        bunkerMode       = false;
         executionCount++;
         lastActionReason = "Redeploy failed - safe vault fallback";
 
@@ -591,6 +584,25 @@ contract UserVault {
         emit AgentUpdated(_newAgent);
     }
 
+    // ── RESET POSITION ────────────────────────────────────────────────────────
+    function resetPosition() external onlyAuthorized {
+        require(!fundsInVault, "Cannot reset while funds in vault");
+
+        positionRegistered = false;
+        fundsInVault       = false;
+        lpTokenId          = 0;
+        savedToken0        = address(0);
+        savedToken1        = address(0);
+        savedFee           = 0;
+        savedTickLower     = 0;
+        savedTickUpper     = 0;
+        threatDetectedAt   = 0;
+        threatDetectedBlock = 0;
+        bunkerMode         = false;
+
+        emit PositionReset(msg.sender);
+    }
+
     // ── VIEW FUNCTIONS ────────────────────────────────────────────────────────
     function getTokenBalance(address token) external view returns (uint256) {
         return IERC20(token).balanceOf(address(this));
@@ -600,14 +612,12 @@ contract UserVault {
         return recoveryPreference;
     }
 
-    // Fix — funds state for dashboard
     function getFundsState() external view returns (string memory) {
         if (fundsInVault && bunkerMode) return "SECURED";
         if (fundsInVault) return "IN_TRANSIT";
         return "IN_POOL";
     }
 
-    // Fix — latest action view for frontend
     function getLatestAction() external view returns (
         string memory threat,
         string memory reason,

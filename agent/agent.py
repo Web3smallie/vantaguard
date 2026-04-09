@@ -41,7 +41,7 @@ HEADERS = {
 
 # ── ETHERLINK CONFIG ──────────────────────────────────────────────────────────
 RPC_URL          = "https://node.mainnet.etherlink.com"
-FACTORY_ADDRESS  = "0x044e8020E6b412835802e73Db12540435B38d870"
+FACTORY_ADDRESS  = "0xcbfAD0dD3653Ad0D6bA0aCa4Ca7309463235367B"
 OKU_API_BASE     = "https://omni.icarus.tools/etherlink/cush"
 POLL_INTERVAL    = 12
 CHAIN_ID         = 42793
