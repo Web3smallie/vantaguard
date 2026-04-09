@@ -795,6 +795,7 @@ def trigger_reflex(vibe_score, policy, threat_info, block_data) -> dict | None:
 
         # pick the correct function based on recovery preference
         preference = policy.get("recovery_preference", 2)  # default: RETURN_TO_WALLET
+        
         if preference == 0:
             exit_fn = vault.functions.redeployToSaferPool()
         elif preference == 1:
